@@ -24,6 +24,7 @@ public class CallKitVoipPlugin: CAPPlugin {
         config.supportsVideo = true
         // Support generic type to handle *User ID*
         config.supportedHandleTypes = [.generic]
+        config.includesCallsInRecents = true
         provider = CXProvider(configuration: config)
         provider?.setDelegate(self, queue: DispatchQueue.main)
         call.resolve()
@@ -32,61 +33,97 @@ public class CallKitVoipPlugin: CAPPlugin {
     public func notifyEvent(eventName: String, uuid: UUID){
         if let config = connectionIdRegistry[uuid] {
             notifyListeners(eventName, data: [
-                "id": config.id,
+                "callId": config.callId,
                 "media": config.media,
-                "name"    : config.name,
-                "duration"    : config.duration,
+                "duration": config.duration,
+                "bookingId": config.bookingId,
+                "username": config.username,
+                "secret": config.secret,
+                "host": config.host,
             ])
-            connectionIdRegistry[uuid] = nil
+            // connectionIdRegistry[uuid] = nil
         }
     }
 
-    public func incomingCall(id: String, media: String, name: String, duration: String) {
+    public func incomingCall(
+      callId: String,
+      media: String,
+      duration: String,
+      bookingId: Int,
+      host: String,
+      username: String,
+      secret: String
+    ) {
         let update                      = CXCallUpdate()
-        update.remoteHandle             = CXHandle(type: .generic, value: name)
+        update.remoteHandle             = CXHandle(type: .generic, value: "\(bookingId)")
         update.hasVideo                 = media == "video"
         update.supportsDTMF             = false
         update.supportsHolding          = true
         update.supportsGrouping         = false
         update.supportsUngrouping       = false
+        update.localizedCallerName = "\(username)"
         let uuid = UUID()
-        connectionIdRegistry[uuid] = .init(id: id, media: media, name: name, duration: duration)
+      
+        connectionIdRegistry[uuid] = .init(
+          callId: callId,
+          media: media,
+          duration: duration,
+          bookingId: bookingId,
+          host: host,
+          username: username,
+          secret: secret
+        )
         self.provider?.reportNewIncomingCall(with: uuid, update: update, completion: { (_) in })
     }
 
-
-
-
     public func endCall(uuid: UUID) {
+        connectionIdRegistry.removeValue(forKey: uuid)
         let controller = CXCallController()
-        let transaction = CXTransaction(action: CXEndCallAction(call: uuid));controller.request(transaction,completion: { error in })
+        let transaction = CXTransaction(action: CXEndCallAction(call: uuid))
+        controller.request(transaction, completion: { error in
+            if let error = error {
+                print("❌ Error ending call: \(error.localizedDescription)")
+            }
+        })
     }
-
-
-
 }
-
 
 // MARK: CallKit events handler
 
 extension CallKitVoipPlugin: CXProviderDelegate {
 
     public func providerDidReset(_ provider: CXProvider) {
-
+        print("CallKit provider reset - cleaning up all calls")
+        connectionIdRegistry.removeAll()
     }
 
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        // Answers an incoming call
-        print("CXAnswerCallAction answers an incoming call")
+        // User tapped "Answer" on CallKit screen
+        print("✅ CXAnswerCallAction - User answered the call")
+        
+        guard let config = connectionIdRegistry[action.callUUID] else {
+            print("❌ No call config found for UUID: \(action.callUUID)")
+            action.fail()
+            return
+        }
+        
+        // Notify your JavaScript/Nuxt app that call was answered
         notifyEvent(eventName: "callAnswered", uuid: action.callUUID)
-        endCall(uuid: action.callUUID)
+        
+        // Fulfill the action (tells CallKit we handled it)
         action.fulfill()
     }
 
     public func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        // End the call
-        print("CXEndCallAction represents ending call")
+        // User ended the call (either by tapping end button or call finished)
+        print("✅ CXEndCallAction - Call ended")
+        
+        // Notify JavaScript
         notifyEvent(eventName: "callEnded", uuid: action.callUUID)
+        
+        // Clean up
+        connectionIdRegistry.removeValue(forKey: action.callUUID)
+        
         action.fulfill()
     }
 
@@ -96,8 +133,6 @@ extension CallKitVoipPlugin: CXProviderDelegate {
         notifyEvent(eventName: "callStarted", uuid: action.callUUID)
         action.fulfill()
     }
-
-
 }
 
 // MARK: PushKit events handler
@@ -110,29 +145,49 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
         notifyListeners("registration", data: ["value": token])
     }
 
-    public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
-         print("didReceiveIncomingPushWith")
-         guard let id = payload.dictionaryPayload["id"] as? String else {
-             return
-         }
-         let media = (payload.dictionaryPayload["media"] as? String) ?? "voice"
-         let name = (payload.dictionaryPayload["name"] as? String) ?? "Unknown"
-         let duration = (payload.dictionaryPayload["duration"] as? String) ?? "0"
-         print("id: \(id)")
-         print("name: \(name)")
-         print("media: \(media)")
-         print("duration: \(duration)")
-        self.incomingCall(id: id, media: media, name: name, duration: duration)
+    public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {    
+        guard let custom = payload.dictionaryPayload["custom"] as? [String: Any],
+            let aData = custom["a"] as? [String: Any],
+            let callId = aData["callId"] as? String else {
+            print("❌ Failed to extract call data from payload")
+            completion()
+            return
+        }
+
+        let media = (aData["media"] as? String) ?? "voice"
+        let duration = (aData["duration"] as? String) ?? "0"
+        let bookingId = (aData["bookingId"] as? Int) ?? 0
+        let host = (aData["host"] as? String) ?? ""
+        let username = (aData["username"] as? String) ?? "Unknown"
+        let secret = (aData["secret"] as? String) ?? ""
+        
+        self.incomingCall(
+            callId: callId,
+            media: media,
+            duration: duration,
+            bookingId: bookingId,
+            host: host,
+            username: username,
+            secret: secret
+        )
+
+        completion()
     }
-
+    
+    public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        print("⚠️ VoIP token invalidated")
+        notifyListeners("tokenInvalidated", data: [:])
+    }
 }
-
 
 extension CallKitVoipPlugin {
     struct CallConfig {
-        let id: String
+        let callId: String
         let media: String
-        let name: String
         let duration: String
+        let bookingId: Int
+        let host: String
+        let username: String
+        let secret: String
     }
 }

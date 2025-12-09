@@ -40,17 +40,29 @@ export interface CallData {
   /**
    * Call ID
    */
-  id:string;
+  callId:string;
   /**
    * Call Type
    */
   media?: CallType;
   /**
-   * Call Display name
-   */
-  name?:string;
-  /**
    * Call duration
    */
   duration?:string;
+  /**
+   * Call Booking ID (Extension)
+   */
+  bookingId?:string;
+  /**
+   * Call Hostname
+   */
+  host?:string;
+  /**
+   * Call Username
+   */
+  username?:string;
+  /**
+   * Call Password
+   */
+  secret?:string;
 }
