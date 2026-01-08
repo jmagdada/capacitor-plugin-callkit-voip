@@ -1,5 +1,6 @@
 package com.bfine.capactior.callkitvoip.androidcall;
 
+import android.app.KeyguardManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -12,13 +13,14 @@ import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.Vibrator;
 import android.util.Log;
+import android.view.WindowManager;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
-import com.bfine.capactior.callkitvoip.R;
 
 import java.util.Objects;
 
@@ -31,7 +33,9 @@ public class VoipForegroundService extends Service {
     NotificationCompat.Builder notificationBuilder;
     public static MediaPlayer ringtone;
     public static Vibrator vibrator;
-    String username="",token="",roomName="";
+    String username="", connectionId="", from="";
+    private PowerManager.WakeLock wakeLock;
+    private KeyguardManager.KeyguardLock keyguardLock;
 
     @Nullable
     @Override
@@ -43,12 +47,42 @@ public class VoipForegroundService extends Service {
     public void onDestroy() {
         super.onDestroy();
         stop_ringtone();
+        releaseWakeLock();
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
-
+        acquireWakeLock();
+    }
+    
+    private void acquireWakeLock() {
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (powerManager != null) {
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK | 
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP | 
+                    PowerManager.ON_AFTER_RELEASE,
+                    "CallKitVoip:IncomingCallWakeLock"
+                );
+                wakeLock.acquire(60000);
+                Log.d("VoipForegroundService", "WakeLock acquired");
+            }
+        } catch (Exception e) {
+            Log.e("VoipForegroundService", "Error acquiring wake lock", e);
+        }
+    }
+    
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+                Log.d("VoipForegroundService", "WakeLock released");
+            }
+        } catch (Exception e) {
+            Log.e("VoipForegroundService", "Error releasing wake lock", e);
+        }
     }
 
     @Override
@@ -74,58 +108,98 @@ public class VoipForegroundService extends Service {
     {
 
         ringtone = new MediaPlayer();
+        connectionId = intent.getStringExtra("connectionId");
         username = intent.getStringExtra("username");
-        token = intent.getStringExtra("token");
-        roomName = intent.getStringExtra("roomName");
-        Log.d("VoipForegroundService","build_incoming_call_notification for "+username);
+        from = intent.getStringExtra("from");
+        
+        if (connectionId == null || connectionId.isEmpty()) {
+            connectionId = "";
+        }
+        if (username == null || username.isEmpty()) {
+            username = "Unknown Caller";
+        }
+        if (from == null || from.isEmpty()) {
+            from = username;
+        }
+        
+        Log.d("VoipForegroundService","build_incoming_call_notification for "+username+" (connectionId: "+connectionId+")");
 
         try {
             Intent receiveCallAction = new Intent(getApplicationContext(), VoipForegroundServiceActionReceiver.class);
-            receiveCallAction.putExtra("token",token);
-            receiveCallAction.putExtra("roomName",roomName);
-            receiveCallAction.putExtra("username",username);
-
+            receiveCallAction.putExtra("connectionId", connectionId);
+            receiveCallAction.putExtra("username", username);
+            receiveCallAction.putExtra("from", from);
             receiveCallAction.setAction("RECEIVE_CALL");
 
             Intent cancelCallAction = new Intent(getApplicationContext(), VoipForegroundServiceActionReceiver.class);
-            cancelCallAction.putExtra("token",token);
-            cancelCallAction.putExtra("roomName",roomName);
-            cancelCallAction.putExtra("username",username);
-
+            cancelCallAction.putExtra("connectionId", connectionId);
+            cancelCallAction.putExtra("username", username);
+            cancelCallAction.putExtra("from", from);
             cancelCallAction.setAction("CANCEL_CALL");
 
-            Intent fullscreenCallAction = new Intent(getApplicationContext(), VoipForegroundServiceActionReceiver.class);
-            fullscreenCallAction.putExtra("token",token);
-            fullscreenCallAction.putExtra("roomName",roomName);
-            fullscreenCallAction.putExtra("username",username);
+            Intent launchAppIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+            if (launchAppIntent != null) {
+                launchAppIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | 
+                                        Intent.FLAG_ACTIVITY_CLEAR_TOP | 
+                                        Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                launchAppIntent.putExtra("connectionId", connectionId);
+                launchAppIntent.putExtra("username", username);
+                launchAppIntent.putExtra("from", from);
+                launchAppIntent.putExtra("isIncomingCall", true);
+            }
 
-            fullscreenCallAction.setAction("FULLSCREEN_CALL");
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            }
 
-            PendingIntent receiveCallPendingIntent = PendingIntent.getBroadcast(getApplicationContext(), 1200, receiveCallAction, PendingIntent.FLAG_UPDATE_CURRENT);
-            PendingIntent cancelCallPendingIntent = PendingIntent.getBroadcast(getApplicationContext(), 1201, cancelCallAction, PendingIntent.FLAG_UPDATE_CURRENT);
-            PendingIntent fullscreenCallPendingIntent = PendingIntent.getBroadcast(getApplicationContext(), 1202, fullscreenCallAction, PendingIntent.FLAG_UPDATE_CURRENT);
+            PendingIntent receiveCallPendingIntent = PendingIntent.getBroadcast(getApplicationContext(), 1200, receiveCallAction, flags);
+            PendingIntent cancelCallPendingIntent = PendingIntent.getBroadcast(getApplicationContext(), 1201, cancelCallAction, flags);
+            
+            PendingIntent fullscreenCallPendingIntent = null;
+            PendingIntent contentIntent = null;
+            
+            if (launchAppIntent != null) {
+                fullscreenCallPendingIntent = PendingIntent.getActivity(getApplicationContext(), 1202, launchAppIntent, flags);
+                contentIntent = PendingIntent.getActivity(getApplicationContext(), 1203, launchAppIntent, flags);
+            }
 
             notificationBuilder = null;
             Uri alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-            notificationBuilder = new NotificationCompat.Builder(this, INCOMING_CHANNEL_ID)
-                    .setContentTitle(username)
-                    .setContentText(getString(R.string.incoming_call))
-                    .setSmallIcon(R.drawable.ic_call_black_24dp)
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+            
+            String displayName = username;
+            if (!from.equals(username) && !from.isEmpty()) {
+                displayName = username + " (" + from + ")";
+            }
+            
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(this, INCOMING_CHANNEL_ID)
+                    .setContentTitle(displayName)
+                    .setContentText("Incoming VoIP call")
+                    .setSmallIcon(android.R.drawable.stat_sys_phone_call)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setCategory(NotificationCompat.CATEGORY_CALL)
                     .setSound(alarmSound)
-
+                    .setOngoing(true)
+                    .setAutoCancel(false)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .addAction(new NotificationCompat.Action.Builder(
-                            0,
-                            getString(R.string.reject),
+                            android.R.drawable.ic_menu_close_clear_cancel,
+                            "Reject",
                             cancelCallPendingIntent).build())
                     .addAction(new NotificationCompat.Action.Builder(
-                            0,
-                            getString(R.string.answer),
-                            receiveCallPendingIntent).build())
-                    .setAutoCancel(false)
-
-                    .setFullScreenIntent(fullscreenCallPendingIntent, true);
+                            android.R.drawable.ic_menu_call,
+                            "Answer",
+                            receiveCallPendingIntent).build());
+            
+            if (contentIntent != null) {
+                builder.setContentIntent(contentIntent);
+            }
+            
+            if (fullscreenCallPendingIntent != null) {
+                builder.setFullScreenIntent(fullscreenCallPendingIntent, true);
+            }
+            
+            notificationBuilder = builder;
             long[] pattern = {0, 100, 1000, 300};
             vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
             AudioManager am = (AudioManager) VoipForegroundService.this.getSystemService(Context.AUDIO_SERVICE);
@@ -133,19 +207,20 @@ public class VoipForegroundService extends Service {
             {
                 vibrator.vibrate(pattern, 0);
             }
-            Uri sound = Uri.parse("android.resource://" + getPackageName() + "/" + R.raw.call);
             try
             {
-                ringtone.setDataSource(getApplicationContext(), sound);
-                ringtone.setAudioStreamType(AudioManager.STREAM_RING);
-                ringtone.prepare();
-                ringtone.setLooping(true);
-                ringtone.start();
-
+                Uri sound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+                if (sound != null) {
+                    ringtone.setDataSource(getApplicationContext(), sound);
+                    ringtone.setAudioStreamType(AudioManager.STREAM_RING);
+                    ringtone.prepare();
+                    ringtone.setLooping(true);
+                    ringtone.start();
+                }
             }
             catch (Exception e)
             {
-                Log.d("VoipForegroundService","1 "+e.toString());
+                Log.d("VoipForegroundService","Error playing ringtone: "+e.toString());
 
             }
 
@@ -198,9 +273,11 @@ public class VoipForegroundService extends Service {
 
             NotificationChannel channel = new NotificationChannel(INCOMING_CHANNEL_ID, INCOMING_CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH);
             channel.setDescription(INCOMING_CHANNEL_NAME);
-
             channel.setSound(null,null);
-
+            channel.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+            channel.setShowBadge(true);
+            channel.enableVibration(true);
+            channel.setBypassDnd(true);
 
             Objects.requireNonNull(getApplicationContext().getSystemService(NotificationManager.class)).createNotificationChannel(channel);
 
