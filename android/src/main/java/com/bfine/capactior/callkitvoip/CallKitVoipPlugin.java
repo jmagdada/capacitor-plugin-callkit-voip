@@ -33,6 +33,7 @@ public class CallKitVoipPlugin extends Plugin {
     public static Bridge staticBridge = null;
     private static Map<String, CallConfig> connectionIdRegistry = new HashMap<>();
     private static PhoneAccountHandle phoneAccountHandle = null;
+    private static String cachedVoipToken = null;
 
     @Override
     public void load() {
@@ -42,6 +43,60 @@ public class CallKitVoipPlugin extends Plugin {
             registerPhoneAccount(context);
         }
         restoreCallStates(context);
+        handleAppLaunchIntent();
+    }
+    
+    private void handleAppLaunchIntent() {
+        try {
+            if (getActivity() == null || getActivity().getIntent() == null) {
+                return;
+            }
+            
+            android.content.Intent intent = getActivity().getIntent();
+            boolean callAnswered = intent.getBooleanExtra("callAnswered", false);
+            boolean isIncomingCall = intent.getBooleanExtra("isIncomingCall", false);
+            String connectionId = intent.getStringExtra("connectionId");
+            
+            if (callAnswered && isIncomingCall && connectionId != null && !connectionId.isEmpty()) {
+                Log.d("CallKitVoip", "App launched from answer button, connectionId: " + connectionId);
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    getActivity().setShowWhenLocked(true);
+                    getActivity().setTurnScreenOn(true);
+                } else {
+                    getActivity().getWindow().addFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                        android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
+                        android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                    );
+                }
+                
+                android.content.Intent serviceIntent = new android.content.Intent(getContext(), com.bfine.capactior.callkitvoip.androidcall.VoipForegroundService.class);
+                serviceIntent.setAction("answered");
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    getContext().startForegroundService(serviceIntent);
+                } else {
+                    getContext().startService(serviceIntent);
+                }
+                
+                final String finalConnectionId = connectionId;
+                bridge.getActivity().runOnUiThread(() -> {
+                    try {
+                        Thread.sleep(500);
+                        notifyEvent("callAnswered", finalConnectionId);
+                        Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + finalConnectionId);
+                    } catch (InterruptedException e) {
+                        Log.e("CallKitVoip", "Error in delayed callback", e);
+                    }
+                });
+                
+                intent.removeExtra("callAnswered");
+                intent.removeExtra("isIncomingCall");
+                intent.removeExtra("connectionId");
+            }
+        } catch (Exception e) {
+            Log.e("CallKitVoip", "Error handling app launch intent", e);
+        }
     }
     
     private void restoreCallStates(Context context) {
@@ -217,6 +272,19 @@ public class CallKitVoipPlugin extends Plugin {
             });
     }
 
+    @PluginMethod
+    public void getVoipToken(PluginCall call) {
+        if (cachedVoipToken != null) {
+            JSObject ret = new JSObject();
+            ret.put("value", cachedVoipToken);
+            call.resolve(ret);
+            Log.d("CallKitVoip", "Retrieved cached VoIP token: " + cachedVoipToken);
+        } else {
+            call.reject("Token not available yet");
+            Log.w("CallKitVoip", "Attempted to get VoIP token but none available");
+        }
+    }
+
     @RequiresApi(api = Build.VERSION_CODES.M)
     private void requestPhoneNumbersPermissionIfNeeded() {
         Context context = getContext();
@@ -260,6 +328,49 @@ public class CallKitVoipPlugin extends Plugin {
     }
 
     @Override
+    protected void handleOnNewIntent(android.content.Intent intent) {
+        super.handleOnNewIntent(intent);
+        
+        try {
+            boolean callAnswered = intent.getBooleanExtra("callAnswered", false);
+            boolean isIncomingCall = intent.getBooleanExtra("isIncomingCall", false);
+            String connectionId = intent.getStringExtra("connectionId");
+            
+            if (callAnswered && isIncomingCall && connectionId != null && !connectionId.isEmpty()) {
+                Log.d("CallKitVoip", "App received new intent from answer button, connectionId: " + connectionId);
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    getActivity().setShowWhenLocked(true);
+                    getActivity().setTurnScreenOn(true);
+                } else {
+                    getActivity().getWindow().addFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                        android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
+                        android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                    );
+                }
+                
+                android.content.Intent serviceIntent = new android.content.Intent(getContext(), com.bfine.capactior.callkitvoip.androidcall.VoipForegroundService.class);
+                serviceIntent.setAction("answered");
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    getContext().startForegroundService(serviceIntent);
+                } else {
+                    getContext().startService(serviceIntent);
+                }
+                
+                notifyEvent("callAnswered", connectionId);
+                Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + connectionId);
+                
+                intent.removeExtra("callAnswered");
+                intent.removeExtra("isIncomingCall");
+                intent.removeExtra("connectionId");
+            }
+        } catch (Exception e) {
+            Log.e("CallKitVoip", "Error handling new intent", e);
+        }
+    }
+    
+    @Override
     public void handleRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.handleRequestPermissionsResult(requestCode, permissions, grantResults);
         
@@ -284,20 +395,18 @@ public class CallKitVoipPlugin extends Plugin {
             return;
         }
 
-        Log.d("notifyEvent", eventName + "  " + config.username + "   " + connectionId);
+        Log.d("notifyEvent", eventName + "  " + config.getDisplayName() + "   " + connectionId);
 
         JSObject data = new JSObject();
         data.put("callId", config.callId);
         data.put("media", config.media);
         data.put("duration", config.duration);
         data.put("bookingId", config.bookingId);
-        data.put("host", config.host);
-        data.put("username", config.username);
-        data.put("secret", config.secret);
         notifyListeners(eventName, data);
     }
 
     public void notifyRegistration(String token) {
+        cachedVoipToken = token;
         JSObject data = new JSObject();
         data.put("value", token);
         notifyListeners("registration", data);
@@ -486,6 +595,24 @@ public class CallKitVoipPlugin extends Plugin {
                     new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1002);
             }
         }
+        
+        if (Build.VERSION.SDK_INT >= 34) {
+            android.app.NotificationManager notificationManager = 
+                (android.app.NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notificationManager != null && !notificationManager.canUseFullScreenIntent()) {
+                try {
+                    android.content.Intent intent = new android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT
+                    );
+                    intent.setData(android.net.Uri.parse("package:" + getContext().getPackageName()));
+                    getActivity().startActivity(intent);
+                    Log.d("CallKitVoip", "Redirecting user to enable Full Screen Intent permission");
+                } catch (Exception e) {
+                    Log.e("CallKitVoip", "Error opening full screen intent settings", e);
+                }
+            }
+        }
+        
         call.resolve();
     }
 

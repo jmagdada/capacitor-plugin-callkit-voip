@@ -79,8 +79,7 @@ public class MyConnectionService extends ConnectionService {
                 public void onShowIncomingCallUi() {
                     super.onShowIncomingCallUi();
                     String connectionId = request.getExtras().getString("connectionId");
-                    String username = request.getExtras().getString("username");
-                    String from = request.getExtras().getString("from");
+                    String displayName = request.getExtras().getString("displayName");
                     
                     Log.d(TAG, "onShowIncomingCallUi called - showing notification UI, connectionId: " + connectionId);
                     
@@ -88,8 +87,7 @@ public class MyConnectionService extends ConnectionService {
                         Intent serviceIntent = new Intent(MyConnectionService.this, VoipForegroundService.class);
                         serviceIntent.setAction("incoming");
                         serviceIntent.putExtra("connectionId", connectionId);
-                        serviceIntent.putExtra("username", username != null ? username : "Unknown Caller");
-                        serviceIntent.putExtra("from", from != null ? from : username);
+                        serviceIntent.putExtra("displayName", displayName != null ? displayName : "Incoming Call");
                         
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                             startForegroundService(serviceIntent);
@@ -179,25 +177,18 @@ public class MyConnectionService extends ConnectionService {
                 return null;
             }
             
-            String fromNumber = extras.getString("from");
-            String username = extras.getString("username");
+            String connectionId = extras.getString("connectionId");
+            String displayName = extras.getString("displayName");
             
-            String addressString = username != null ? username : (fromNumber != null ? fromNumber : "unknown");
-            if (addressString.contains(" ") || !addressString.matches("^[a-zA-Z0-9@._-]+$")) {
-                addressString = username != null ? username : "unknown";
+            if (displayName == null || displayName.isEmpty()) {
+                displayName = "Incoming Call";
             }
-            Uri addressUri;
             
-            if (addressString.startsWith("tel:") || addressString.startsWith("sip:")) {
-                addressUri = Uri.parse(addressString);
-            } else {
-                addressUri = Uri.fromParts("sip", addressString, null);
-            }
+            Uri addressUri = Uri.fromParts("sip", connectionId != null ? connectionId : "unknown", null);
             
             connection.setAddress(addressUri, TelecomManager.PRESENTATION_ALLOWED);
             Log.d(TAG, "Set address: " + addressUri);
             
-            String displayName = fromNumber != null ? fromNumber : (username != null ? username : "Unknown");
             connection.setCallerDisplayName(displayName, TelecomManager.PRESENTATION_ALLOWED);
             Log.d(TAG, "Set display name: " + displayName);
             

@@ -32,35 +32,45 @@ openssl pkcs12 -in YOUR_CERTIFICATES.p12 -out app.pem -nodes -clcerts
 
 To make this plugin work, you need to call `.register()` method and then you can use API bellow.
 
+**IMPORTANT:** Add your listeners BEFORE calling `register()` to ensure you don't miss the `registration` event. Alternatively, use `getVoipToken()` to retrieve the token after registration.
+
 ```typescript
 import {CallKitVoip} from "capacitor-plugin-callkit-voip"
 
 
 async function registerCallKit(){
 
+  // Voip Token has been generated 
+  CallKitVoip.addListener("registration", (token:CallToken) =>
+    console.log(`VOIP token has been received ${token.value}`)
+  );
+
+  // Notify Incoming Call Accepted
+  CallKitVoip.addListener("callAnswered", (data:CallData) => 
+    console.log(`Call has been received from ${call.name} (call ID: ${data.id}) (call Type: ${data.media}) (call duration: ${data.duration})`)
+  );
+
+  // Notify Call Ended
+  CallKitVoip.addListener("callEnded", (data:CallData) =>
+    console.log(`Call has been ended ${call.name} (call ID: ${data.id}) (call Type: ${data.media}) (call duration: ${data.duration})`)
+  );
+
+  // Notify Call Started
+  CallKitVoip.addListener("callStarted", (data:CallData) =>
+    console.log(`Call has been started with ${call.name} (call ID: ${data.id}) (call Type: ${data.media}) (call duration: ${data.duration})`)
+   );
+  
   // Register plugin of VOIP notifications 
-    await CallKitVoip.register(); // can be used with `.then()`
-    console.log("Push notification has been registered")
+  await CallKitVoip.register(); // can be used with `.then()`
+  console.log("Push notification has been registered")
   
-    // Voip Token has been generated 
-    CallKitVoip.addListener("registration", (token:CallToken) =>
-      console.log(`VOIP token has been received ${token.value}`)
-    );
-  
-    // Notify Incoming Call Accepted
-    CallKitVoip.addListener("callAnswered", (data:CallData) => 
-      console.log(`Call has been received from ${call.name} (call ID: ${data.id}) (call Type: ${data.media}) (call duration: ${data.duration})`)
-    );
-
-    // Notify Call Ended
-    CallKitVoip.addListener("callEnded", (data:CallData) =>
-      console.log(`Call has been ended ${call.name} (call ID: ${data.id}) (call Type: ${data.media}) (call duration: ${data.duration})`)
-    );
-
-    // Notify Call Started
-    CallKitVoip.addListener("callStarted", (data:CallData) =>
-      console.log(`Call has been started with ${call.name} (call ID: ${data.id}) (call Type: ${data.media}) (call duration: ${data.duration})`)
-     );
+  // Alternative: Retrieve token after registration
+  try {
+    const token = await CallKitVoip.getVoipToken();
+    console.log(`VOIP token: ${token.value}`);
+  } catch (error) {
+    console.log('Token will be received via listener');
+  }
   
 }
 ```
@@ -117,6 +127,7 @@ If you will have some complication, feel free to write me email at [kin9aziz@gma
 ## API
 
 * [`register()`](#register)
+* [`getVoipToken()`](#getvoiptoken)
 * [`addListener("registration", handler)`](#addlistener)
 * [`addListener("callAnswered", handler)`](#addlistener)
 * [`addListener("callStarted", handler)`](#addlistener)
@@ -139,6 +150,28 @@ CallKitVoip.register().then(() => {
 ```
 
 **Returns:** <code>void</code>
+
+--------------------
+
+### getVoipToken()
+Retrieve the cached VOIP token. This method is useful when you need to get the token after registration has already completed.
+
+**Note:** Make sure to add the listener BEFORE calling `register()`, or use this method to retrieve the token after registration.
+
+```typescript
+import {CallKitVoip, CallToken} from "capacitor-plugin-callkit-voip"
+//...
+await CallKitVoip.register();
+
+try {
+  const token: CallToken = await CallKitVoip.getVoipToken();
+  console.log(`VOIP token: ${token.value}`);
+} catch (error) {
+  console.error('Token not available yet');
+}
+```
+
+**Returns:** <code>Promise&lt;CallToken&gt;</code>
 
 --------------------
 

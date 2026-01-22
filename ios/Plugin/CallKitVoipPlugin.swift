@@ -13,6 +13,7 @@ public class CallKitVoipPlugin: CAPPlugin {
     private var provider: CXProvider?
     private let voipRegistry            = PKPushRegistry(queue: nil)
     private var connectionIdRegistry : [UUID: CallConfig] = [:]
+    private var cachedVoipToken: String?
 
     @objc func register(_ call: CAPPluginCall) {
         voipRegistry.delegate = self
@@ -29,6 +30,14 @@ public class CallKitVoipPlugin: CAPPlugin {
         provider?.setDelegate(self, queue: DispatchQueue.main)
         call.resolve()
     }
+    
+    @objc func getVoipToken(_ call: CAPPluginCall) {
+        if let token = cachedVoipToken {
+            call.resolve(["value": token])
+        } else {
+            call.reject("Token not available yet")
+        }
+    }
 
     public func notifyEvent(eventName: String, uuid: UUID){
         if let config = connectionIdRegistry[uuid] {
@@ -36,12 +45,8 @@ public class CallKitVoipPlugin: CAPPlugin {
                 "callId": config.callId,
                 "media": config.media,
                 "duration": config.duration,
-                "bookingId": config.bookingId,
-                "username": config.username,
-                "secret": config.secret,
-                "host": config.host,
+                "bookingId": config.bookingId
             ])
-            // connectionIdRegistry[uuid] = nil
         }
     }
 
@@ -49,10 +54,7 @@ public class CallKitVoipPlugin: CAPPlugin {
       callId: String,
       media: String,
       duration: String,
-      bookingId: Int,
-      host: String,
-      username: String,
-      secret: String
+      bookingId: Int
     ) {
         let update                      = CXCallUpdate()
         update.remoteHandle             = CXHandle(type: .generic, value: "\(bookingId)")
@@ -61,17 +63,14 @@ public class CallKitVoipPlugin: CAPPlugin {
         update.supportsHolding          = true
         update.supportsGrouping         = false
         update.supportsUngrouping       = false
-        update.localizedCallerName = "\(username)"
+        update.localizedCallerName = "Call #\(bookingId)"
         let uuid = UUID()
       
         connectionIdRegistry[uuid] = .init(
           callId: callId,
           media: media,
           duration: duration,
-          bookingId: bookingId,
-          host: host,
-          username: username,
-          secret: secret
+          bookingId: bookingId
         )
         self.provider?.reportNewIncomingCall(with: uuid, update: update, completion: { (_) in })
     }
@@ -142,6 +141,7 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
         let parts = pushCredentials.token.map { String(format: "%02.2hhx", $0) }
         let token = parts.joined()
         print("Token: \(token)")
+        cachedVoipToken = token
         notifyListeners("registration", data: ["value": token])
     }
 
@@ -157,18 +157,12 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
         let media = (aData["media"] as? String) ?? "voice"
         let duration = (aData["duration"] as? String) ?? "0"
         let bookingId = (aData["bookingId"] as? Int) ?? 0
-        let host = (aData["host"] as? String) ?? ""
-        let username = (aData["username"] as? String) ?? "Unknown"
-        let secret = (aData["secret"] as? String) ?? ""
         
         self.incomingCall(
             callId: callId,
             media: media,
             duration: duration,
-            bookingId: bookingId,
-            host: host,
-            username: username,
-            secret: secret
+            bookingId: bookingId
         )
 
         completion()
@@ -186,8 +180,5 @@ extension CallKitVoipPlugin {
         let media: String
         let duration: String
         let bookingId: Int
-        let host: String
-        let username: String
-        let secret: String
     }
 }

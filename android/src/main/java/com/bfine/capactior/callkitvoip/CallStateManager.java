@@ -26,9 +26,6 @@ public class CallStateManager {
             callData.put("media", config.media);
             callData.put("duration", config.duration);
             callData.put("bookingId", config.bookingId);
-            callData.put("host", config.host);
-            callData.put("username", config.username);
-            callData.put("secret", config.secret);
             callData.put("timestamp", System.currentTimeMillis());
             
             callsJson.put(connectionId, callData);
@@ -58,10 +55,7 @@ public class CallStateManager {
                     callData.getString("callId"),
                     callData.getString("media"),
                     callData.getString("duration"),
-                    callData.getInt("bookingId"),
-                    callData.getString("host"),
-                    callData.getString("username"),
-                    callData.getString("secret")
+                    callData.getInt("bookingId")
                 );
                 
                 callConfigs.put(connectionId, config);

@@ -1,11 +1,16 @@
 import { WebPlugin } from '@capacitor/core';
 
-import type { CallKitVoipPlugin, PhoneAccountStatus, CallMetrics } from './definitions';
+import type { CallKitVoipPlugin, PhoneAccountStatus, CallMetrics, CallToken } from './definitions';
 
 export class CallKitVoipWeb extends WebPlugin implements CallKitVoipPlugin {
   async register(): Promise<void> {
     console.log('CallKitVoip.register - not supported on web');
     return;
+  }
+
+  async getVoipToken(): Promise<CallToken> {
+    console.log('CallKitVoip.getVoipToken - not supported on web');
+    throw new Error('VoIP token not available on web platform');
   }
 
   async requestPhoneNumbersPermission(): Promise<{ granted: boolean; message: string }> {

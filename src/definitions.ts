@@ -3,6 +3,8 @@ import type { PluginListenerHandle } from '@capacitor/core';
 export interface CallKitVoipPlugin {
   register(options: { userToken: string }): Promise<void>;
 
+  getVoipToken(): Promise<CallToken>;
+
   requestPhoneNumbersPermission(): Promise<{ granted: boolean; message: string }>;
 
   checkPhoneAccountStatus(): Promise<PhoneAccountStatus>;
@@ -79,18 +81,6 @@ export interface CallData {
    * Call Booking ID (Extension)
    */
   bookingId?:string;
-  /**
-   * Call Hostname
-   */
-  host?:string;
-  /**
-   * Call Username
-   */
-  username?:string;
-  /**
-   * Call Password
-   */
-  secret?:string;
 }
 
 export interface PhoneAccountStatus {

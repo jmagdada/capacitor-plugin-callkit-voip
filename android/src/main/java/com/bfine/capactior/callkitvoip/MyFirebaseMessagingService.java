@@ -42,14 +42,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             String media = remoteMessage.getData().get("media");
             String duration = remoteMessage.getData().get("duration");
             String bookingIdStr = remoteMessage.getData().get("bookingId");
-            String host = remoteMessage.getData().get("host");
-            String username = remoteMessage.getData().get("username");
-            String secret = remoteMessage.getData().get("secret");
-            String fromNumber = remoteMessage.getData().get("from");
-            
-            if (fromNumber == null || fromNumber.isEmpty()) {
-                fromNumber = remoteMessage.getData().get("name");
-            }
             
             if (connectionId == null || connectionId.isEmpty()) {
                 connectionId = UUID.randomUUID().toString();
@@ -73,33 +65,23 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             } catch (NumberFormatException e) {
                 Log.e(TAG, "Invalid bookingId format: " + bookingIdStr);
             }
-            if (host == null) {
-                host = "";
-            }
-            if (username == null) {
-                username = "Unknown";
-            }
-            if (secret == null) {
-                secret = "";
-            }
             
             CallConfig config = new CallConfig(
                 callId,
                 media,
                 duration,
-                bookingId,
-                host,
-                username,
-                secret
+                bookingId
             );
             
             CallKitVoipPlugin.storeCallConfig(connectionId, config);
             CallStateManager.saveCallState(getApplicationContext(), connectionId, config);
             CallQualityMonitor.trackCallStart(connectionId);
             
+            String displayName = config.getDisplayName();
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (PhoneAccountHelper.isPhoneAccountEnabled(getApplicationContext())) {
-                    showNativeIncomingCall(connectionId, username, fromNumber);
+                    showNativeIncomingCall(connectionId, displayName);
                 } else {
                     Log.w(TAG, "PhoneAccount not enabled, using notification fallback");
                     CallKitVoipPlugin plugin = CallKitVoipPlugin.getInstance();
@@ -107,10 +89,10 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                         plugin.notifyError(CallKitError.PHONE_ACCOUNT_DISABLED, 
                             "PhoneAccount is not enabled. Using notification UI instead.");
                     }
-                    showNotificationIncomingCall(connectionId, username, fromNumber);
+                    showNotificationIncomingCall(connectionId, displayName);
                 }
             } else {
-                showNotificationIncomingCall(connectionId, username, fromNumber);
+                showNotificationIncomingCall(connectionId, displayName);
             }
         }
 
@@ -121,13 +103,13 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
-    private void showNativeIncomingCall(String connectionId, String username, String fromNumber) {
+    private void showNativeIncomingCall(String connectionId, String displayName) {
         try {
             TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
             
             if (telecomManager == null) {
                 Log.e(TAG, "TelecomManager is null, falling back to notification");
-                showNotificationIncomingCall(connectionId, username, fromNumber);
+                showNotificationIncomingCall(connectionId, displayName);
                 return;
             }
 
@@ -135,34 +117,24 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             
             if (phoneAccountHandle == null) {
                 Log.e(TAG, "PhoneAccountHandle is not registered, falling back to notification");
-                showNotificationIncomingCall(connectionId, username, fromNumber);
+                showNotificationIncomingCall(connectionId, displayName);
                 return;
             }
 
-            String addressString = username != null ? username : (fromNumber != null ? fromNumber : "unknown");
-            if (addressString.contains(" ") || !addressString.matches("^[a-zA-Z0-9@._-]+$")) {
-                addressString = username != null ? username : "unknown";
-            }
-            Uri addressUri;
-            if (addressString.startsWith("tel:") || addressString.startsWith("sip:")) {
-                addressUri = Uri.parse(addressString);
-            } else {
-                addressUri = Uri.fromParts("sip", addressString, null);
-            }
+            Uri addressUri = Uri.fromParts("sip", connectionId, null);
 
             Bundle extras = new Bundle();
             extras.putString("connectionId", connectionId);
-            extras.putString("username", username);
-            extras.putString("from", fromNumber != null ? fromNumber : username);
+            extras.putString("displayName", displayName);
             extras.putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, addressUri);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 extras.putBoolean(PhoneAccount.EXTRA_ADD_SELF_MANAGED_CALLS_TO_INCALLSERVICE, true);
             }
 
-            Log.d(TAG, "Calling addNewIncomingCall with connectionId: " + connectionId + ", username: " + username + ", from: " + fromNumber + ", addressUri: " + addressUri);
+            Log.d(TAG, "Calling addNewIncomingCall with connectionId: " + connectionId + ", displayName: " + displayName + ", addressUri: " + addressUri);
             telecomManager.addNewIncomingCall(phoneAccountHandle, extras);
             
-            Log.d(TAG, "Incoming call shown: " + username);
+            Log.d(TAG, "Incoming call shown: " + displayName);
             
         } catch (SecurityException e) {
             Log.e(TAG, "SecurityException: Falling back to notification UI. Error: " + e.getMessage());
@@ -172,7 +144,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 plugin.notifyError(CallKitError.PERMISSION_DENIED, 
                     "Permission denied for native call UI. Using notification UI instead.");
             }
-            showNotificationIncomingCall(connectionId, username, fromNumber);
+            showNotificationIncomingCall(connectionId, displayName);
         } catch (Exception e) {
             Log.e(TAG, "Error showing native incoming call, falling back to notification", e);
             CallQualityMonitor.trackCallFailure(connectionId, "Exception: " + e.getMessage());
@@ -181,17 +153,28 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 plugin.notifyError(CallKitError.CONNECTION_FAILED, 
                     "Failed to show native call UI: " + e.getMessage());
             }
-            showNotificationIncomingCall(connectionId, username, fromNumber);
+            showNotificationIncomingCall(connectionId, displayName);
         }
     }
 
-    private void showNotificationIncomingCall(String connectionId, String username, String fromNumber) {
+    private void showNotificationIncomingCall(String connectionId, String displayName) {
         try {
+            android.os.PowerManager powerManager = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (powerManager != null && !powerManager.isInteractive()) {
+                android.os.PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
+                    android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK | 
+                    android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "CallKitVoip:NotificationWakeLock"
+                );
+                wakeLock.acquire(3000);
+                Log.d(TAG, "Wake lock acquired to turn on screen for incoming call");
+                wakeLock.release();
+            }
+            
             Intent serviceIntent = new Intent(this, VoipForegroundService.class);
             serviceIntent.setAction("incoming");
             serviceIntent.putExtra("connectionId", connectionId);
-            serviceIntent.putExtra("username", username);
-            serviceIntent.putExtra("from", fromNumber != null ? fromNumber : username);
+            serviceIntent.putExtra("displayName", displayName);
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent);
@@ -199,7 +182,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 startService(serviceIntent);
             }
             
-            Log.d(TAG, "Notification incoming call service started for: " + username);
+            Log.d(TAG, "Notification incoming call service started for: " + displayName);
         } catch (Exception e) {
             Log.e(TAG, "Error showing notification incoming call", e);
         }

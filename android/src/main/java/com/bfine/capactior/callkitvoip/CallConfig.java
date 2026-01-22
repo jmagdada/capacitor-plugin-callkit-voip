@@ -5,18 +5,15 @@ public class CallConfig {
     public final String media;
     public final String duration;
     public final int bookingId;
-    public final String host;
-    public final String username;
-    public final String secret;
 
-    public CallConfig(String callId, String media, String duration, int bookingId, 
-                     String host, String username, String secret) {
+    public CallConfig(String callId, String media, String duration, int bookingId) {
         this.callId = callId;
         this.media = media;
         this.duration = duration;
         this.bookingId = bookingId;
-        this.host = host;
-        this.username = username;
-        this.secret = secret;
+    }
+    
+    public String getDisplayName() {
+        return "Call #" + bookingId;
     }
 }
