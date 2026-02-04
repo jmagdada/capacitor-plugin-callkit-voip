@@ -54,10 +54,10 @@ public class CallKitVoipPlugin: CAPPlugin {
       callId: String,
       media: String,
       duration: String,
-      bookingId: Int
+      bookingId: String
     ) {
         let update                      = CXCallUpdate()
-        update.remoteHandle             = CXHandle(type: .generic, value: "\(bookingId)")
+        update.remoteHandle             = CXHandle(type: .generic, value: bookingId)
         update.hasVideo                 = media == "video"
         update.supportsDTMF             = false
         update.supportsHolding          = true
@@ -156,7 +156,7 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
 
         let media = (aData["media"] as? String) ?? "voice"
         let duration = (aData["duration"] as? String) ?? "0"
-        let bookingId = (aData["bookingId"] as? Int) ?? 0
+        let bookingId = (aData["bookingId"] as? String) ?? (aData["bookingId"] as? Int).map { String($0) } ?? ""
         
         self.incomingCall(
             callId: callId,
@@ -179,6 +179,6 @@ extension CallKitVoipPlugin {
         let callId: String
         let media: String
         let duration: String
-        let bookingId: Int
+        let bookingId: String
     }
 }

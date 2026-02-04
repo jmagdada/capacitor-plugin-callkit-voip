@@ -51,11 +51,13 @@ public class CallStateManager {
                 String connectionId = keys.next();
                 JSONObject callData = callsJson.getJSONObject(connectionId);
                 
+                Object bookingIdObj = callData.opt("bookingId");
+                String bookingId = bookingIdObj != null ? bookingIdObj.toString() : "";
                 CallConfig config = new CallConfig(
                     callData.getString("callId"),
                     callData.getString("media"),
                     callData.getString("duration"),
-                    callData.getInt("bookingId")
+                    bookingId
                 );
                 
                 callConfigs.put(connectionId, config);

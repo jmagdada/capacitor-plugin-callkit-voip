@@ -57,15 +57,8 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             if (duration == null) {
                 duration = "0";
             }
-            int bookingId = 0;
-            try {
-                if (bookingIdStr != null) {
-                    bookingId = Integer.parseInt(bookingIdStr);
-                }
-            } catch (NumberFormatException e) {
-                Log.e(TAG, "Invalid bookingId format: " + bookingIdStr);
-            }
-            
+            String bookingId = bookingIdStr != null ? bookingIdStr : "";
+
             CallConfig config = new CallConfig(
                 callId,
                 media,

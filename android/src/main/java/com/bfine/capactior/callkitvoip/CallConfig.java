@@ -4,9 +4,9 @@ public class CallConfig {
     public final String callId;
     public final String media;
     public final String duration;
-    public final int bookingId;
+    public final String bookingId;
 
-    public CallConfig(String callId, String media, String duration, int bookingId) {
+    public CallConfig(String callId, String media, String duration, String bookingId) {
         this.callId = callId;
         this.media = media;
         this.duration = duration;
