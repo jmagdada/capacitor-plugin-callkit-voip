@@ -98,6 +98,9 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     @RequiresApi(api = Build.VERSION_CODES.M)
     private void showNativeIncomingCall(String connectionId, String displayName) {
         try {
+            CallKitVoipPlugin.initializePhoneAccountIfNeeded(getApplicationContext());
+            MyConnectionService.destroyCurrentConnectionIfAny();
+
             TelecomManager telecomManager = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
             
             if (telecomManager == null) {
@@ -182,6 +185,9 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     private void endCall() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            MyConnectionService.destroyCurrentConnectionIfAny();
+        }
         CallKitVoipPlugin plugin = CallKitVoipPlugin.getInstance();
         if (plugin != null) {
             Map<String, CallConfig> allConfigs = CallKitVoipPlugin.getAllCallConfigs();

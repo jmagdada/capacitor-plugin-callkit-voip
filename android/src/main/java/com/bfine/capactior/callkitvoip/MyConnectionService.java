@@ -34,6 +34,19 @@ public class MyConnectionService extends ConnectionService {
         currentConnection = null;
     }
 
+    public static void destroyCurrentConnectionIfAny() {
+        if (currentConnection != null) {
+            try {
+                currentConnection.setDisconnected(new DisconnectCause(DisconnectCause.LOCAL));
+                currentConnection.destroy();
+                Log.d(TAG, "Destroyed current connection so PhoneAccount is free for next call");
+            } catch (Exception e) {
+                Log.e(TAG, "Error destroying current connection", e);
+            }
+            currentConnection = null;
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();

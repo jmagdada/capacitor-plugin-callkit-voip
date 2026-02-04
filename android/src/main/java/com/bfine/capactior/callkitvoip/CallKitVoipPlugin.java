@@ -462,6 +462,9 @@ public class CallKitVoipPlugin extends Plugin {
             CallStateManager.clearCallState(getContext(), connectionId);
             CallQualityMonitor.clearMetrics(connectionId);
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            MyConnectionService.destroyCurrentConnectionIfAny();
+        }
         call.resolve();
     }
     
