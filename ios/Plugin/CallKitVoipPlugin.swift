@@ -13,6 +13,7 @@ public class CallKitVoipPlugin: CAPPlugin {
     private var provider: CXProvider?
     private let voipRegistry            = PKPushRegistry(queue: nil)
     private var connectionIdRegistry : [UUID: CallConfig] = [:]
+    private var handoffConnectionIds: Set<UUID> = []
     private var cachedVoipToken: String?
 
     @objc func register(_ call: CAPPluginCall) {
@@ -92,37 +93,27 @@ public class CallKitVoipPlugin: CAPPlugin {
 extension CallKitVoipPlugin: CXProviderDelegate {
 
     public func providerDidReset(_ provider: CXProvider) {
-        print("CallKit provider reset - cleaning up all calls")
         connectionIdRegistry.removeAll()
+        handoffConnectionIds.removeAll()
     }
 
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        // User tapped "Answer" on CallKit screen
-        print("✅ CXAnswerCallAction - User answered the call")
-        
-        guard let config = connectionIdRegistry[action.callUUID] else {
-            print("❌ No call config found for UUID: \(action.callUUID)")
+        guard connectionIdRegistry[action.callUUID] != nil else {
             action.fail()
             return
         }
-        
-        // Notify your JavaScript/Nuxt app that call was answered
+        handoffConnectionIds.insert(action.callUUID)
         notifyEvent(eventName: "callAnswered", uuid: action.callUUID)
-        
-        // Fulfill the action (tells CallKit we handled it)
         action.fulfill()
+        endCall(uuid: action.callUUID)
     }
 
     public func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        // User ended the call (either by tapping end button or call finished)
-        print("✅ CXEndCallAction - Call ended")
-        
-        // Notify JavaScript
-        notifyEvent(eventName: "callEnded", uuid: action.callUUID)
-        
-        // Clean up
+        let isHandoff = handoffConnectionIds.remove(action.callUUID) != nil
+        if !isHandoff {
+            notifyEvent(eventName: "callEnded", uuid: action.callUUID)
+        }
         connectionIdRegistry.removeValue(forKey: action.callUUID)
-        
         action.fulfill()
     }
 
