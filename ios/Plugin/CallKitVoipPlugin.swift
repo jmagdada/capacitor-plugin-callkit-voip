@@ -16,23 +16,34 @@ public class CallKitVoipPlugin: CAPPlugin {
     private var handoffConnectionIds: Set<UUID> = []
     private var cachedVoipToken: String?
 
-    @objc func register(_ call: CAPPluginCall) {
+    @objc dynamic func register(_ call: CAPPluginCall) {
+        print("📱 CallKitVoip: Starting registration...")
         voipRegistry.delegate = self
         voipRegistry.desiredPushTypes = [.voIP]
+        print("📱 CallKitVoip: PushKit delegate set, desiredPushTypes = [.voIP]")
+        
         let config = CXProviderConfiguration(localizedName: "Secure Call")
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
-        // Native call log shows video icon if it was video call.
         config.supportsVideo = true
-        // Support generic type to handle *User ID*
         config.supportedHandleTypes = [.generic]
         config.includesCallsInRecents = true
         provider = CXProvider(configuration: config)
         provider?.setDelegate(self, queue: DispatchQueue.main)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            if let token = self?.cachedVoipToken {
+                print("📱 CallKitVoip: Emitting cached token via delayed check: \(token)")
+                self?.notifyListeners("registration", data: ["value": token])
+            } else {
+                print("⚠️ CallKitVoip: No token available after registration (delegate may not have been called)")
+            }
+        }
+        
         call.resolve()
     }
     
-    @objc func getVoipToken(_ call: CAPPluginCall) {
+    @objc dynamic func getVoipToken(_ call: CAPPluginCall) {
         if let token = cachedVoipToken {
             call.resolve(["value": token])
         } else {
@@ -129,11 +140,18 @@ extension CallKitVoipPlugin: CXProviderDelegate {
 extension CallKitVoipPlugin: PKPushRegistryDelegate {
 
     public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+        print("📱 CallKitVoip: pushRegistry didUpdate delegate method called")
         let parts = pushCredentials.token.map { String(format: "%02.2hhx", $0) }
         let token = parts.joined()
-        print("Token: \(token)")
+        print("📱 CallKitVoip: VoIP token received: \(token)")
         cachedVoipToken = token
-        notifyListeners("registration", data: ["value": token])
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            print("📱 CallKitVoip: Emitting registration event for token: \(token)")
+            self.notifyListeners("registration", data: ["value": token])
+            print("📱 CallKitVoip: Registration event emitted successfully")
+        }
     }
 
     public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {    

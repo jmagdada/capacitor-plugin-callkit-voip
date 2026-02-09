@@ -237,7 +237,7 @@ public class CallKitVoipPlugin extends Plugin {
     @PluginMethod
     public void register(PluginCall call) {
         final String topicName = call.getString("userToken");
-        Log.d("CallKitVoip", "register");
+        Log.d("CallKitVoip", "📱 CallKitVoip: Starting registration...");
 
         if (topicName == null) {
             call.reject("Topic name hasn't been specified correctly");
@@ -250,6 +250,7 @@ public class CallKitVoipPlugin extends Plugin {
             .getInstance()
             .getToken()
             .addOnSuccessListener(token -> {
+                Log.d("CallKitVoip", "📱 CallKitVoip: FCM token received: " + token);
                 notifyRegistration(token);
                 
                 FirebaseMessaging
@@ -265,6 +266,25 @@ public class CallKitVoipPlugin extends Plugin {
                         Logger.debug("CallKit: Cannot subscribe");
                         call.reject("Cant subscribe to topic " + topicName);
                     });
+                
+                if (bridge != null && bridge.getActivity() != null) {
+                    android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+                    handler.postDelayed(() -> {
+                        if (cachedVoipToken != null) {
+                            Log.d("CallKitVoip", "📱 CallKitVoip: Emitting cached token via delayed check (1s): " + cachedVoipToken);
+                            notifyRegistration(cachedVoipToken);
+                        } else {
+                            Log.w("CallKitVoip", "⚠️ CallKitVoip: No token available after registration (token may not have been received)");
+                        }
+                    }, 1000);
+                    
+                    handler.postDelayed(() -> {
+                        if (cachedVoipToken != null) {
+                            Log.d("CallKitVoip", "📱 CallKitVoip: Emitting cached token via delayed check (3s): " + cachedVoipToken);
+                            notifyRegistration(cachedVoipToken);
+                        }
+                    }, 3000);
+                }
             })
             .addOnFailureListener(e -> {
                 Logger.debug("CallKit: Cannot get token");
@@ -282,6 +302,18 @@ public class CallKitVoipPlugin extends Plugin {
         } else {
             call.reject("Token not available yet");
             Log.w("CallKitVoip", "Attempted to get VoIP token but none available");
+        }
+    }
+
+    @PluginMethod
+    public void emitRegistrationEvent(PluginCall call) {
+        if (cachedVoipToken != null) {
+            Log.d("CallKitVoip", "📱 CallKitVoip: Manually emitting registration event for cached token");
+            notifyRegistration(cachedVoipToken);
+            call.resolve();
+        } else {
+            call.reject("Token not available yet");
+            Log.w("CallKitVoip", "Attempted to emit registration event but no token available");
         }
     }
 
@@ -406,11 +438,21 @@ public class CallKitVoipPlugin extends Plugin {
     }
 
     public void notifyRegistration(String token) {
+        Log.d("CallKitVoip", "📱 CallKitVoip: notifyRegistration called with token: " + token);
         cachedVoipToken = token;
         JSObject data = new JSObject();
         data.put("value", token);
-        notifyListeners("registration", data);
-        Log.d("CallKitVoip", "Registration event fired with token " + token);
+        
+        if (bridge != null && bridge.getActivity() != null) {
+            bridge.getActivity().runOnUiThread(() -> {
+                Log.d("CallKitVoip", "📱 CallKitVoip: Emitting registration event for token: " + token);
+                notifyListeners("registration", data);
+                Log.d("CallKitVoip", "📱 CallKitVoip: Registration event emitted successfully");
+            });
+        } else {
+            Log.w("CallKitVoip", "⚠️ CallKitVoip: Bridge or activity is null, cannot emit registration event");
+            notifyListeners("registration", data);
+        }
     }
 
     public static void storeCallConfig(String connectionId, CallConfig config) {
