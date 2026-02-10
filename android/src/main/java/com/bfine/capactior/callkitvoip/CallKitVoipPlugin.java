@@ -27,6 +27,7 @@ import androidx.core.content.ContextCompat;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @CapacitorPlugin(name = "CallKitVoip")
 public class CallKitVoipPlugin extends Plugin {
@@ -34,6 +35,8 @@ public class CallKitVoipPlugin extends Plugin {
     private static Map<String, CallConfig> connectionIdRegistry = new HashMap<>();
     private static PhoneAccountHandle phoneAccountHandle = null;
     private static String cachedVoipToken = null;
+    private static Map<String, Boolean> listenerRegistrationMap = new ConcurrentHashMap<>();
+    private static boolean queueFlushScheduled = false;
 
     @Override
     public void load() {
@@ -43,7 +46,30 @@ public class CallKitVoipPlugin extends Plugin {
             registerPhoneAccount(context);
         }
         restoreCallStates(context);
+        restoreAndFlushQueuedEvents(context);
         handleAppLaunchIntent();
+        startPeriodicQueueFlushCheck();
+    }
+    
+    private void restoreAndFlushQueuedEvents(Context context) {
+        java.util.List<EventQueueManager.QueuedEvent> queuedEvents = EventQueueManager.getQueuedEvents(context);
+        if (!queuedEvents.isEmpty()) {
+            Log.d("CallKitVoip", "Found " + queuedEvents.size() + " queued events from previous session, will flush when listeners are registered");
+        }
+    }
+    
+    private void startPeriodicQueueFlushCheck() {
+        android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (checkHasListeners("callAnswered") || checkHasListeners("callRejected")) {
+                    flushQueuedEvents();
+                } else {
+                    handler.postDelayed(this, 500);
+                }
+            }
+        }, 500);
     }
     
     private void handleAppLaunchIntent() {
@@ -429,12 +455,123 @@ public class CallKitVoipPlugin extends Plugin {
 
         Log.d("notifyEvent", eventName + "  " + config.getDisplayName() + "   " + connectionId);
 
+        if (eventName.equals("callAnswered") || eventName.equals("callRejected")) {
+            boolean hasListeners = checkHasListeners(eventName);
+            
+            if (!hasListeners) {
+                Log.d("CallKitVoip", "No listeners registered for " + eventName + ", queuing event for connectionId: " + connectionId);
+                EventQueueManager.queueEvent(getContext(), eventName, connectionId);
+                return;
+            } else {
+                scheduleQueueFlush();
+            }
+        }
+
         JSObject data = new JSObject();
         data.put("callId", config.callId);
         data.put("media", config.media);
         data.put("duration", config.duration);
         data.put("bookingId", config.bookingId);
         notifyListeners(eventName, data);
+    }
+    
+    private boolean checkHasListeners(String eventName) {
+        try {
+            java.lang.reflect.Method method = Plugin.class.getDeclaredMethod("hasListeners", String.class);
+            method.setAccessible(true);
+            boolean hasListeners = (Boolean) method.invoke(this, eventName);
+            if (hasListeners && (eventName.equals("callAnswered") || eventName.equals("callRejected"))) {
+                listenerRegistrationMap.put(eventName, true);
+            }
+            return hasListeners;
+        } catch (Exception e) {
+            Boolean registered = listenerRegistrationMap.get(eventName);
+            if (registered != null && registered) {
+                return true;
+            }
+            
+            try {
+                java.lang.reflect.Field listenersField = Plugin.class.getDeclaredField("listeners");
+                listenersField.setAccessible(true);
+                Object listenersObj = listenersField.get(this);
+                if (listenersObj instanceof Map) {
+                    Map<?, ?> listeners = (Map<?, ?>) listenersObj;
+                    Object listenerList = listeners.get(eventName);
+                    if (listenerList instanceof java.util.List) {
+                        java.util.List<?> list = (java.util.List<?>) listenerList;
+                        boolean hasListeners = !list.isEmpty();
+                        if (hasListeners && (eventName.equals("callAnswered") || eventName.equals("callRejected"))) {
+                            listenerRegistrationMap.put(eventName, true);
+                            scheduleQueueFlush();
+                        }
+                        return hasListeners;
+                    }
+                }
+            } catch (Exception ex) {
+            }
+            
+            return false;
+        }
+    }
+    
+    private void scheduleQueueFlush() {
+        if (!queueFlushScheduled) {
+            queueFlushScheduled = true;
+            android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+            handler.postDelayed(() -> {
+                flushQueuedEvents();
+                queueFlushScheduled = false;
+            }, 100);
+        }
+    }
+    
+    private void flushQueuedEvents() {
+        Context context = getContext();
+        if (context == null) {
+            Log.w("CallKitVoip", "Context is null, cannot flush queued events");
+            return;
+        }
+        
+        java.util.List<EventQueueManager.QueuedEvent> queuedEvents = EventQueueManager.getQueuedEvents(context);
+        if (queuedEvents.isEmpty()) {
+            Log.d("CallKitVoip", "No queued events to flush");
+            return;
+        }
+        
+        Log.d("CallKitVoip", "Flushing " + queuedEvents.size() + " queued events");
+        
+        java.util.List<EventQueueManager.QueuedEvent> eventsToRemove = new java.util.ArrayList<>();
+        
+        for (EventQueueManager.QueuedEvent event : queuedEvents) {
+            CallConfig config = connectionIdRegistry.get(event.connectionId);
+            if (config == null) {
+                Log.w("CallKitVoip", "Call config not found for queued event connectionId: " + event.connectionId + ", removing from queue");
+                EventQueueManager.removeEvent(context, event.eventName, event.connectionId);
+                continue;
+            }
+            
+            boolean hasListeners = checkHasListeners(event.eventName);
+            if (hasListeners) {
+                JSObject data = new JSObject();
+                data.put("callId", config.callId);
+                data.put("media", config.media);
+                data.put("duration", config.duration);
+                data.put("bookingId", config.bookingId);
+                
+                notifyListeners(event.eventName, data);
+                Log.d("CallKitVoip", "Flushed queued event: " + event.eventName + " for connectionId: " + event.connectionId);
+                
+                eventsToRemove.add(event);
+            } else {
+                Log.w("CallKitVoip", "No listeners for " + event.eventName + " yet, keeping event in queue");
+            }
+        }
+        
+        for (EventQueueManager.QueuedEvent event : eventsToRemove) {
+            EventQueueManager.removeEvent(context, event.eventName, event.connectionId);
+        }
+        
+        Log.d("CallKitVoip", "Finished flushing queued events, removed " + eventsToRemove.size() + " events");
     }
 
     public void notifyRegistration(String token) {
