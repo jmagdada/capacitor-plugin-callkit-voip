@@ -1,6 +1,7 @@
 package com.bfine.capactior.callkitvoip;
 
 import android.content.Intent;
+import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -19,12 +20,18 @@ import androidx.annotation.RequiresApi;
 
 import com.bfine.capactior.callkitvoip.androidcall.VoipForegroundService;
 import com.getcapacitor.Bridge;
+import android.content.Intent;
+import android.app.NotificationManager;
 
 @RequiresApi(api = Build.VERSION_CODES.M)
 public class MyConnectionService extends ConnectionService {
 
     private static final String TAG = "MyConnectionService";
+    private static final long CALL_TIMEOUT_MS = 30000;
     private static Connection currentConnection;
+    private static Handler timeoutHandler;
+    private static Runnable timeoutRunnable;
+    private static String timeoutConnectionId;
 
     public static Connection getConnection() {
         return currentConnection;
@@ -35,6 +42,7 @@ public class MyConnectionService extends ConnectionService {
     }
 
     public static void destroyCurrentConnectionIfAny() {
+        cancelTimeout();
         if (currentConnection != null) {
             try {
                 currentConnection.setDisconnected(new DisconnectCause(DisconnectCause.LOCAL));
@@ -45,6 +53,107 @@ public class MyConnectionService extends ConnectionService {
             }
             currentConnection = null;
         }
+    }
+
+    private static void cancelTimeout() {
+        if (timeoutHandler != null && timeoutRunnable != null) {
+            String cancelledId = timeoutConnectionId;
+            timeoutHandler.removeCallbacks(timeoutRunnable);
+            timeoutRunnable = null;
+            timeoutConnectionId = null;
+            Log.d(TAG, "Call timeout cancelled for connectionId: " + cancelledId);
+        }
+    }
+
+    private static void startTimeout(final Connection connection, final ConnectionRequest request, final android.content.Context context) {
+        cancelTimeout();
+        
+        Bundle extras = request.getExtras();
+        if (extras == null) {
+            Log.e(TAG, "Cannot start timeout - request extras is null");
+            return;
+        }
+        
+        final String connectionId = extras.getString("connectionId");
+        if (connectionId == null || connectionId.isEmpty()) {
+            Log.e(TAG, "Cannot start timeout - connectionId is null or empty");
+            return;
+        }
+        
+        timeoutConnectionId = connectionId;
+        
+        if (timeoutHandler == null) {
+            timeoutHandler = new Handler(Looper.getMainLooper());
+        }
+        
+        timeoutRunnable = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (currentConnection == connection && connectionId.equals(timeoutConnectionId)) {
+                        int currentState = connection.getState();
+                        Log.d(TAG, "Timeout fired - current connection state: " + currentState + " (0=INITIALIZING, 1=NEW, 2=RINGING, 4=ACTIVE, 6=DISCONNECTED)");
+                        
+                        if (currentState != Connection.STATE_ACTIVE && currentState != Connection.STATE_DISCONNECTED) {
+                            Log.d(TAG, "Call timeout reached (30s) - auto-rejecting call, connectionId: " + connectionId);
+                            
+                            try {
+                                Intent serviceIntent = new Intent(context, VoipForegroundService.class);
+                                context.stopService(serviceIntent);
+                                Log.d(TAG, "VoipForegroundService stopped due to timeout");
+                                
+                                NotificationManager notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+                                if (notificationManager != null) {
+                                    notificationManager.cancel(120);
+                                    Log.d(TAG, "Notification cancelled due to timeout");
+                                }
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error stopping VoipForegroundService on timeout", e);
+                            }
+                            
+                            CallQualityMonitor.trackCallEnd(connectionId, "Timeout - auto rejected");
+                            
+                            CallKitVoipPlugin plugin = CallKitVoipPlugin.getInstance();
+                            if (plugin != null) {
+                                plugin.notifyEvent("callRejected", connectionId);
+                            }
+                            
+                            CallKitVoipPlugin.removeCallConfig(connectionId);
+                            CallStateManager.clearCallState(context, connectionId);
+                            CallQualityMonitor.clearMetrics(connectionId);
+                            
+                            try {
+                                DisconnectCause cause = new DisconnectCause(DisconnectCause.REJECTED);
+                                connection.setDisconnected(cause);
+                                connection.destroy();
+                                Log.d(TAG, "Connection destroyed due to timeout");
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error auto-rejecting call on timeout", e);
+                            }
+                            
+                            currentConnection = null;
+                            timeoutRunnable = null;
+                            timeoutConnectionId = null;
+                        } else {
+                            Log.d(TAG, "Timeout fired but connection state is " + currentState + " (already ACTIVE or DISCONNECTED), ignoring timeout");
+                            timeoutRunnable = null;
+                            timeoutConnectionId = null;
+                        }
+                    } else {
+                        Log.d(TAG, "Timeout fired but currentConnection has changed or connectionId mismatch, ignoring timeout. Current: " + (currentConnection == connection) + ", ID match: " + (connectionId.equals(timeoutConnectionId)));
+                        timeoutRunnable = null;
+                        timeoutConnectionId = null;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error in timeout runnable", e);
+                    timeoutRunnable = null;
+                    timeoutConnectionId = null;
+                }
+            }
+        };
+        
+        timeoutHandler.postDelayed(timeoutRunnable, CALL_TIMEOUT_MS);
+        Log.d(TAG, "Call timeout started (30 seconds) for connectionId: " + connectionId);
     }
 
     @Override
@@ -77,6 +186,7 @@ public class MyConnectionService extends ConnectionService {
         
         if (currentConnection != null) {
             Log.w(TAG, "There is already an active connection. Cleaning up...");
+            cancelTimeout();
             try {
                 currentConnection.setDisconnected(new DisconnectCause(DisconnectCause.LOCAL));
                 currentConnection.destroy();
@@ -117,6 +227,7 @@ public class MyConnectionService extends ConnectionService {
                 @RequiresApi(api = Build.VERSION_CODES.O)
                 @Override
                 public void onAnswer() {
+                    cancelTimeout();
                     this.setActive();
                     
                     String connectionId = request.getExtras().getString("connectionId");
@@ -133,6 +244,7 @@ public class MyConnectionService extends ConnectionService {
 
                 @Override
                 public void onReject() {
+                    cancelTimeout();
                     String connectionId = request.getExtras().getString("connectionId");
                     
                     Log.d(TAG, "Call rejected - connectionId: " + connectionId);
@@ -156,12 +268,14 @@ public class MyConnectionService extends ConnectionService {
 
                 @Override
                 public void onAbort() {
+                    cancelTimeout();
                     super.onAbort();
                     currentConnection = null;
                 }
 
                 @Override
                 public void onDisconnect() {
+                    cancelTimeout();
                     String connectionId = request.getExtras().getString("connectionId");
                     
                     Log.d(TAG, "Call disconnected - connectionId: " + connectionId);
@@ -240,8 +354,11 @@ public class MyConnectionService extends ConnectionService {
                         } else {
                             Log.w(TAG, "Connection state is " + currentState + ", not setting to RINGING");
                         }
+                        
+                        startTimeout(connection, request, MyConnectionService.this.getApplicationContext());
                     } catch (Exception e) {
                         Log.e(TAG, "Error setting connection to RINGING state", e);
+                        startTimeout(connection, request, MyConnectionService.this.getApplicationContext());
                     }
                 }
             }, 100);
@@ -289,6 +406,7 @@ public class MyConnectionService extends ConnectionService {
         
         if (currentConnection != null) {
             Log.w(TAG, "Cleaning up existing connection due to failure");
+            cancelTimeout();
             try {
                 currentConnection.setDisconnected(new DisconnectCause(DisconnectCause.ERROR));
                 currentConnection.destroy();
