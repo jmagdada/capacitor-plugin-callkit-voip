@@ -47,6 +47,11 @@ export interface CallKitVoipPlugin {
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
 
   addListener(
+      eventName: 'callCancelled',
+      listenerFunc: (callData: CallData) => void
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
+
+  addListener(
       eventName: 'error',
       listenerFunc: (error: CallKitError) => void
   ): Promise<PluginListenerHandle> & PluginListenerHandle;

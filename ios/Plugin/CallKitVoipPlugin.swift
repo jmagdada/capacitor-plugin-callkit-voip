@@ -140,8 +140,24 @@ public class CallKitVoipPlugin: CAPPlugin {
         answeredCalls.remove(uuid)
         connectionIdRegistry.removeValue(forKey: uuid)
         
-        // End the call through CallKit
         provider?.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+    }
+    
+    private func endAllCalls() {
+        print("📱 Ending all active calls due to cancellation")
+        
+        for (uuid, _) in connectionIdRegistry {
+            cancelTimeoutTimer(for: uuid)
+            answeredCalls.remove(uuid)
+            provider?.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+            notifyEvent(eventName: "callCancelled", uuid: uuid)
+        }
+        
+        connectionIdRegistry.removeAll()
+        answeredCalls.removeAll()
+        timeoutTimers.removeAll()
+        
+        print("📱 All calls ended and cleaned up")
     }
     
     private func startTimeoutTimer(for uuid: UUID) {
@@ -270,9 +286,21 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
         print("📱 Payload: \(payload.dictionaryPayload)")
         
         guard let custom = payload.dictionaryPayload["custom"] as? [String: Any],
-              let aData = custom["a"] as? [String: Any],
-              let callId = aData["callId"] as? String else {
+              let aData = custom["a"] as? [String: Any] else {
             print("❌ Invalid payload structure")
+            completion()
+            return
+        }
+        
+        if let callType = aData["type"] as? String, callType == "call_cancelled" {
+            print("📱 Call cancellation received - ending all active calls")
+            endAllCalls()
+            completion()
+            return
+        }
+        
+        guard let callId = aData["callId"] as? String else {
+            print("❌ Invalid payload structure - missing callId")
             completion()
             return
         }
@@ -284,7 +312,6 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
         
         print("📱 Processing call - ID: \(callId), Media: \(media)")
         
-        // Report to CallKit immediately
         self.incomingCall(
             callId: callId,
             media: media,
@@ -292,7 +319,6 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
             bookingId: bookingId
         )
         
-        // MUST call completion handler
         completion()
     }
     

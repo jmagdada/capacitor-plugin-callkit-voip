@@ -1,6 +1,7 @@
 package com.bfine.capactior.callkitvoip;
 
 import android.annotation.SuppressLint;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
@@ -89,9 +90,11 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             }
         }
 
-        if (remoteMessage.getData().containsKey("type") && 
-            remoteMessage.getData().get("type").equals("stopCall")) {
-            endCall();
+        if (remoteMessage.getData().containsKey("type")) {
+            String type = remoteMessage.getData().get("type");
+            if (type.equals("stopCall") || type.equals("call_cancelled")) {
+                endCall();
+            }
         }
     }
 
@@ -185,15 +188,32 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     private void endCall() {
+        Log.d(TAG, "Call cancellation received - ending all active calls");
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             MyConnectionService.destroyCurrentConnectionIfAny();
         }
+        
+        try {
+            Intent serviceIntent = new Intent(this, VoipForegroundService.class);
+            stopService(serviceIntent);
+            Log.d(TAG, "VoipForegroundService stopped due to cancellation");
+            
+            NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notificationManager != null) {
+                notificationManager.cancel(120);
+                Log.d(TAG, "Notification cancelled due to call cancellation");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error stopping VoipForegroundService on cancellation", e);
+        }
+        
         CallKitVoipPlugin plugin = CallKitVoipPlugin.getInstance();
         if (plugin != null) {
             Map<String, CallConfig> allConfigs = CallKitVoipPlugin.getAllCallConfigs();
             for (String connectionId : allConfigs.keySet()) {
-                CallQualityMonitor.trackCallEnd(connectionId, "Remote hangup");
-                plugin.notifyEvent("callEnded", connectionId);
+                CallQualityMonitor.trackCallEnd(connectionId, "Call cancelled");
+                plugin.notifyEvent("callCancelled", connectionId);
                 CallKitVoipPlugin.removeCallConfig(connectionId);
                 CallStateManager.clearCallState(getApplicationContext(), connectionId);
                 CallQualityMonitor.clearMetrics(connectionId);
