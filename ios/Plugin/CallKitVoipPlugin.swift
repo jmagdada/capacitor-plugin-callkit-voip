@@ -292,7 +292,7 @@ extension CallKitVoipPlugin: PKPushRegistryDelegate {
             return
         }
         
-        if let callType = aData["type"] as? String, callType == "call_cancelled" {
+        if let callType = aData["call_type"] as? String, callType == "call_cancelled" {
             print("📱 Call cancellation received - ending all active calls")
             endAllCalls()
             completion()

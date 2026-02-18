@@ -35,8 +35,8 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     public void onMessageReceived(RemoteMessage remoteMessage) {
         Log.d(TAG, "received " + remoteMessage.getData());
 
-        if (remoteMessage.getData().containsKey("type") && 
-            remoteMessage.getData().get("type").equals("call")) {
+        if (remoteMessage.getData().containsKey("call_type") && 
+            remoteMessage.getData().get("call_type").equals("call")) {
             
             String connectionId = remoteMessage.getData().get("connectionId");
             String callId = remoteMessage.getData().get("callId");
@@ -90,8 +90,8 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             }
         }
 
-        if (remoteMessage.getData().containsKey("type")) {
-            String type = remoteMessage.getData().get("type");
+        if (remoteMessage.getData().containsKey("call_type")) {
+            String type = remoteMessage.getData().get("call_type");
             if (type.equals("stopCall") || type.equals("call_cancelled")) {
                 endCall();
             }
