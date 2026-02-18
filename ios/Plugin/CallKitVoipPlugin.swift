@@ -206,7 +206,7 @@ extension CallKitVoipPlugin: CXProviderDelegate {
         answeredCalls.removeAll()
     }
     
-    // Called when user answers the call
+    // Called when user answers the call — request microphone at answer time (late-invite approach)
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         print("✅ User answered call: \(action.callUUID)")
         
@@ -217,20 +217,32 @@ extension CallKitVoipPlugin: CXProviderDelegate {
         }
         
         cancelTimeoutTimer(for: action.callUUID)
-        
-        // Mark as answered
         answeredCalls.insert(action.callUUID)
         
-        // This tells iOS "we're handling this call now"
-        action.fulfill(withDateConnected: Date())
+        let uuid = action.callUUID
         
-        // Now configure audio session
-        configureAudioSession()
+        func fulfillAndNotify() {
+            action.fulfill(withDateConnected: Date())
+            configureAudioSession()
+            notifyEvent(eventName: "callAnswered", uuid: uuid)
+            print("📱 Call answered event sent to JS")
+        }
         
-        // Notify your JavaScript side that call was answered
-        notifyEvent(eventName: "callAnswered", uuid: action.callUUID)
-        
-        print("📱 Call answered event sent to JS")
+        let session = AVAudioSession.sharedInstance()
+        switch session.recordPermission {
+        case .granted:
+            fulfillAndNotify()
+        case .denied:
+            // Still fulfill so CallKit is happy; app can show "Microphone required" in its UI
+            fulfillAndNotify()
+            print("⚠️ Microphone permission denied - app may prompt user to enable in Settings")
+        case .undetermined:
+            session.requestRecordPermission { _ in
+                DispatchQueue.main.async { fulfillAndNotify() }
+            }
+        @unknown default:
+            fulfillAndNotify()
+        }
     }
     
     // Called when user declines or call ends

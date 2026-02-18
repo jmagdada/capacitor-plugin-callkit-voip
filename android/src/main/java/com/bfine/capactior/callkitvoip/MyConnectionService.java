@@ -232,13 +232,13 @@ public class MyConnectionService extends ConnectionService {
                     
                     String connectionId = request.getExtras().getString("connectionId");
                     
-                    Log.d(TAG, "Call answered - connectionId: " + connectionId);
+                    Log.d(TAG, "Call answered - connectionId: " + connectionId + ", requesting microphone at answer (late-invite)");
                     
                     CallQualityMonitor.trackCallEnd(connectionId, "User answered");
                     
                     CallKitVoipPlugin plugin = CallKitVoipPlugin.getInstance();
                     if (plugin != null) {
-                        plugin.notifyEvent("callAnswered", connectionId);
+                        plugin.requestMicrophoneThenNotifyCallAnswered(connectionId);
                     }
                 }
 

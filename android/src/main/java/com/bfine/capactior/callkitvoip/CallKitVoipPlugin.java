@@ -37,6 +37,9 @@ public class CallKitVoipPlugin extends Plugin {
     private static String cachedVoipToken = null;
     private static Map<String, Boolean> listenerRegistrationMap = new ConcurrentHashMap<>();
     private static boolean queueFlushScheduled = false;
+    /** ConnectionId to notify callAnswered when RECORD_AUDIO permission result is received (late-invite: request mic at answer). */
+    private static String pendingAnswerConnectionId = null;
+    private static final int REQUEST_CODE_MICROPHONE_AT_ANSWER = 1003;
 
     @Override
     public void load() {
@@ -106,15 +109,21 @@ public class CallKitVoipPlugin extends Plugin {
                 }
                 
                 final String finalConnectionId = connectionId;
-                bridge.getActivity().runOnUiThread(() -> {
-                    try {
-                        Thread.sleep(500);
-                        notifyEvent("callAnswered", finalConnectionId);
-                        Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + finalConnectionId);
-                    } catch (InterruptedException e) {
-                        Log.e("CallKitVoip", "Error in delayed callback", e);
-                    }
-                });
+                if (ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    bridge.getActivity().runOnUiThread(() -> {
+                        try {
+                            Thread.sleep(500);
+                            notifyEvent("callAnswered", finalConnectionId);
+                            Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + finalConnectionId);
+                        } catch (InterruptedException e) {
+                            Log.e("CallKitVoip", "Error in delayed callback", e);
+                        }
+                    });
+                } else {
+                    pendingAnswerConnectionId = finalConnectionId;
+                    ActivityCompat.requestPermissions(getActivity(), new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_CODE_MICROPHONE_AT_ANSWER);
+                    Log.d("CallKitVoip", "Requesting RECORD_AUDIO at answer for connectionId: " + finalConnectionId);
+                }
                 
                 intent.removeExtra("callAnswered");
                 intent.removeExtra("isIncomingCall");
@@ -395,7 +404,7 @@ public class CallKitVoipPlugin extends Plugin {
             String connectionId = intent.getStringExtra("connectionId");
             
             if (callAnswered && isIncomingCall && connectionId != null && !connectionId.isEmpty()) {
-                Log.d("CallKitVoip", "App received new intent from answer button, connectionId: " + connectionId);
+                Log.d("CallKitVoip", "App received new intent from answer button, connectionId: " + connectionId + " (request mic at answer)");
                 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                     getActivity().setShowWhenLocked(true);
@@ -416,8 +425,14 @@ public class CallKitVoipPlugin extends Plugin {
                     getContext().startService(serviceIntent);
                 }
                 
-                notifyEvent("callAnswered", connectionId);
-                Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + connectionId);
+                if (ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    notifyEvent("callAnswered", connectionId);
+                    Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + connectionId);
+                } else {
+                    pendingAnswerConnectionId = connectionId;
+                    ActivityCompat.requestPermissions(getActivity(), new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_CODE_MICROPHONE_AT_ANSWER);
+                    Log.d("CallKitVoip", "Requesting RECORD_AUDIO at answer for connectionId: " + connectionId);
+                }
                 
                 intent.removeExtra("callAnswered");
                 intent.removeExtra("isIncomingCall");
@@ -443,7 +458,32 @@ public class CallKitVoipPlugin extends Plugin {
             } else {
                 Log.w("CallKitVoip", "READ_PHONE_NUMBERS permission denied by user");
             }
+        } else if (requestCode == REQUEST_CODE_MICROPHONE_AT_ANSWER && pendingAnswerConnectionId != null) {
+            String connectionId = pendingAnswerConnectionId;
+            pendingAnswerConnectionId = null;
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            Log.d("CallKitVoip", "Microphone at answer: " + (granted ? "granted" : "denied") + ", notifying callAnswered for " + connectionId);
+            notifyEvent("callAnswered", connectionId);
         }
+    }
+    
+    /**
+     * Request microphone permission at answer time (late-invite approach). If already granted, notifies
+     * callAnswered immediately; otherwise requests permission and notifies when user responds in handleRequestPermissionsResult.
+     */
+    public void requestMicrophoneThenNotifyCallAnswered(String connectionId) {
+        if (getActivity() == null) {
+            Log.w("CallKitVoip", "No activity for microphone request, notifying callAnswered anyway");
+            notifyEvent("callAnswered", connectionId);
+            return;
+        }
+        if (ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            notifyEvent("callAnswered", connectionId);
+            return;
+        }
+        pendingAnswerConnectionId = connectionId;
+        ActivityCompat.requestPermissions(getActivity(), new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_CODE_MICROPHONE_AT_ANSWER);
+        Log.d("CallKitVoip", "Requesting RECORD_AUDIO at answer for connectionId: " + connectionId);
     }
 
     public void notifyEvent(String eventName, String connectionId) {
