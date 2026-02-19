@@ -43,6 +43,9 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             String media = remoteMessage.getData().get("media");
             String duration = remoteMessage.getData().get("duration");
             String bookingIdStr = remoteMessage.getData().get("bookingId");
+            String type = remoteMessage.getData().get("type");
+            String callType = remoteMessage.getData().get("call_type");
+            String channelId = remoteMessage.getData().get("channel_id");
             
             if (connectionId == null || connectionId.isEmpty()) {
                 connectionId = UUID.randomUUID().toString();
@@ -59,12 +62,18 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 duration = "0";
             }
             String bookingId = bookingIdStr != null ? bookingIdStr : "";
+            if (type == null) type = "";
+            if (callType == null) callType = "";
+            if (channelId == null) channelId = "";
 
             CallConfig config = new CallConfig(
                 callId,
                 media,
                 duration,
-                bookingId
+                bookingId,
+                type,
+                callType,
+                channelId
             );
             
             CallKitVoipPlugin.storeCallConfig(connectionId, config);

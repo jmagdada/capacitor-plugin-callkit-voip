@@ -13,13 +13,17 @@ export interface CallKitVoipPlugin {
 
   requestNotificationPermission(): Promise<void>;
 
-  answerCall(options: { connectionId: string }): Promise<void>;
+  answerCall(options: { uuid: string }): Promise<void>;
 
-  rejectCall(options: { connectionId: string }): Promise<void>;
+  rejectCall(options: { uuid: string }): Promise<void>;
 
-  hangupCall(options: { connectionId: string }): Promise<void>;
+  hangupCall(options: { uuid: string }): Promise<void>;
 
-  getCallMetrics(options: { connectionId: string }): Promise<CallMetrics>;
+  callConnected(options: { uuid: string }): Promise<void>;
+
+  endCall(options: { uuid: string }): Promise<void>;
+
+  getCallMetrics(options: { uuid: string }): Promise<CallMetrics>;
 
   addListener(
       eventName: 'registration',
@@ -29,6 +33,11 @@ export interface CallKitVoipPlugin {
   addListener(
       eventName: 'callAnswered',
       listenerFunc: (callData: CallData)  => void
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
+
+  addListener(
+      eventName: 'callConnected',
+      listenerFunc: (callData: CallData) => void
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
 
   addListener(
@@ -86,6 +95,11 @@ export interface CallData {
    * Call Booking ID (Extension)
    */
   bookingId?:string;
+
+  type?: string;
+  call_type?: string;
+  channel_id?: string;
+  uuid?: string;
 }
 
 export interface PhoneAccountStatus {

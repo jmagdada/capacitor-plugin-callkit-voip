@@ -26,6 +26,9 @@ public class CallStateManager {
             callData.put("media", config.media);
             callData.put("duration", config.duration);
             callData.put("bookingId", config.bookingId);
+            callData.put("type", config.type);
+            callData.put("call_type", config.call_type);
+            callData.put("channel_id", config.channel_id);
             callData.put("timestamp", System.currentTimeMillis());
             
             callsJson.put(connectionId, callData);
@@ -53,11 +56,17 @@ public class CallStateManager {
                 
                 Object bookingIdObj = callData.opt("bookingId");
                 String bookingId = bookingIdObj != null ? bookingIdObj.toString() : "";
+                String type = callData.optString("type", "");
+                String callType = callData.optString("call_type", "");
+                String channelId = callData.optString("channel_id", "");
                 CallConfig config = new CallConfig(
                     callData.getString("callId"),
                     callData.getString("media"),
                     callData.getString("duration"),
-                    bookingId
+                    bookingId,
+                    type,
+                    callType,
+                    channelId
                 );
                 
                 callConfigs.put(connectionId, config);

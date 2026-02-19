@@ -41,22 +41,32 @@ export class CallKitVoipWeb extends WebPlugin implements CallKitVoipPlugin {
     return;
   }
 
-  async answerCall(_options: { connectionId: string }): Promise<void> {
+  async answerCall(_options: { uuid: string }): Promise<void> {
     console.log('CallKitVoip.answerCall - not supported on web');
     return;
   }
 
-  async rejectCall(_options: { connectionId: string }): Promise<void> {
+  async rejectCall(_options: { uuid: string }): Promise<void> {
     console.log('CallKitVoip.rejectCall - not supported on web');
     return;
   }
 
-  async hangupCall(_options: { connectionId: string }): Promise<void> {
+  async hangupCall(_options: { uuid: string }): Promise<void> {
     console.log('CallKitVoip.hangupCall - not supported on web');
     return;
   }
 
-  async getCallMetrics(_options: { connectionId: string }): Promise<CallMetrics> {
+  async callConnected(_options: { uuid: string }): Promise<void> {
+    console.log('CallKitVoip.callConnected - not supported on web');
+    return;
+  }
+
+  async endCall(_options: { uuid: string }): Promise<void> {
+    console.log('CallKitVoip.endCall - not supported on web');
+    return;
+  }
+
+  async getCallMetrics(_options: { uuid: string }): Promise<CallMetrics> {
     console.log('CallKitVoip.getCallMetrics - not supported on web');
     return {};
   }

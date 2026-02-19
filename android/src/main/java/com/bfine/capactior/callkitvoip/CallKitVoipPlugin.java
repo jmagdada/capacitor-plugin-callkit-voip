@@ -110,15 +110,10 @@ public class CallKitVoipPlugin extends Plugin {
                 
                 final String finalConnectionId = connectionId;
                 if (ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    bridge.getActivity().runOnUiThread(() -> {
-                        try {
-                            Thread.sleep(500);
-                            notifyEvent("callAnswered", finalConnectionId);
-                            Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + finalConnectionId);
-                        } catch (InterruptedException e) {
-                            Log.e("CallKitVoip", "Error in delayed callback", e);
-                        }
-                    });
+                    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                        notifyEvent("callAnswered", finalConnectionId);
+                        Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + finalConnectionId);
+                    }, 500);
                 } else {
                     pendingAnswerConnectionId = finalConnectionId;
                     ActivityCompat.requestPermissions(getActivity(), new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_CODE_MICROPHONE_AT_ANSWER);
@@ -512,6 +507,10 @@ public class CallKitVoipPlugin extends Plugin {
         data.put("media", config.media);
         data.put("duration", config.duration);
         data.put("bookingId", config.bookingId);
+        data.put("type", config.type);
+        data.put("call_type", config.call_type);
+        data.put("channel_id", config.channel_id);
+        data.put("uuid", connectionId);
         notifyListeners(eventName, data);
     }
     
@@ -597,6 +596,10 @@ public class CallKitVoipPlugin extends Plugin {
                 data.put("media", config.media);
                 data.put("duration", config.duration);
                 data.put("bookingId", config.bookingId);
+                data.put("type", config.type);
+                data.put("call_type", config.call_type);
+                data.put("channel_id", config.channel_id);
+                data.put("uuid", event.connectionId);
                 
                 notifyListeners(event.eventName, data);
                 Log.d("CallKitVoip", "Flushed queued event: " + event.eventName + " for connectionId: " + event.connectionId);
@@ -650,7 +653,7 @@ public class CallKitVoipPlugin extends Plugin {
 
     @PluginMethod
     public void answerCall(PluginCall call) {
-        String connectionId = call.getString("connectionId");
+        String connectionId = call.getString("uuid");
         if (connectionId != null) {
             CallQualityMonitor.trackCallEnd(connectionId, "User answered");
             notifyEvent("callAnswered", connectionId);
@@ -660,7 +663,7 @@ public class CallKitVoipPlugin extends Plugin {
 
     @PluginMethod
     public void rejectCall(PluginCall call) {
-        String connectionId = call.getString("connectionId");
+        String connectionId = call.getString("uuid");
         if (connectionId != null) {
             CallQualityMonitor.trackCallEnd(connectionId, "User rejected");
             notifyEvent("callRejected", connectionId);
@@ -673,7 +676,7 @@ public class CallKitVoipPlugin extends Plugin {
 
     @PluginMethod
     public void hangupCall(PluginCall call) {
-        String connectionId = call.getString("connectionId");
+        String connectionId = call.getString("uuid");
         if (connectionId != null) {
             CallQualityMonitor.trackCallEnd(connectionId, "User hangup");
             notifyEvent("callEnded", connectionId);
@@ -686,15 +689,40 @@ public class CallKitVoipPlugin extends Plugin {
         }
         call.resolve();
     }
-    
+
+    @PluginMethod
+    public void callConnected(PluginCall call) {
+        String connectionId = call.getString("uuid");
+        if (connectionId != null) {
+            Log.d("CallKitVoip", "Call connected for uuid: " + connectionId);
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void endCall(PluginCall call) {
+        String connectionId = call.getString("uuid");
+        if (connectionId != null) {
+            CallQualityMonitor.trackCallEnd(connectionId, "User end call");
+            notifyEvent("callEnded", connectionId);
+            removeCallConfig(connectionId);
+            CallStateManager.clearCallState(getContext(), connectionId);
+            CallQualityMonitor.clearMetrics(connectionId);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            MyConnectionService.destroyCurrentConnectionIfAny();
+        }
+        call.resolve();
+    }
+
     @PluginMethod
     public void getCallMetrics(PluginCall call) {
-        String connectionId = call.getString("connectionId");
+        String connectionId = call.getString("uuid");
         if (connectionId == null) {
             call.reject("connectionId is required");
             return;
         }
-        
+
         Map<String, Object> metrics = CallQualityMonitor.getCallMetrics(connectionId);
         JSObject ret = new JSObject();
         for (Map.Entry<String, Object> entry : metrics.entrySet()) {
