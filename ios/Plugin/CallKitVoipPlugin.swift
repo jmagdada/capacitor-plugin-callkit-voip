@@ -18,9 +18,6 @@ public class CallKitVoipPlugin: CAPPlugin {
     // Track timeout timers for auto-reject
     private var timeoutTimers: [UUID: Timer] = [:]
 
-    // Pending answer action — fulfilled in callConnected() when VoIP is actually connected
-    private var pendingAnswerAction: CXAnswerCallAction?
-
     // MARK: - Plugin Lifecycle
 
     // ✅ Called before JS bridge is ready — ideal place to set up CXProvider and observers
@@ -89,20 +86,27 @@ public class CallKitVoipPlugin: CAPPlugin {
             return
         }
 
+        // Extract the PushKit completion handler — we MUST call this inside
+        // reportNewIncomingCall's callback to keep the app alive on iOS 16
+        let completion = notification.userInfo?["completion"] as? () -> Void
+
         guard let custom = payload["custom"] as? [String: Any],
               let aData = custom["a"] as? [String: Any] else {
             print("❌ CallKitVoip: Invalid payload structure")
+            completion?()
             return
         }
 
         if let callType = aData["call_type"] as? String, callType == "call_cancelled" {
             print("📱 CallKitVoip: Call cancellation received — ending all active calls")
             endAllCalls()
+            completion?()
             return
         }
 
         guard let callId = aData["callId"] as? String else {
             print("❌ CallKitVoip: Invalid payload — missing callId")
+            completion?()
             return
         }
 
@@ -116,7 +120,16 @@ public class CallKitVoipPlugin: CAPPlugin {
 
         print("📱 CallKitVoip: Processing incoming call — ID: \(callId), Media: \(media)")
 
-        incomingCall(callId: callId, media: media, duration: duration, bookingId: bookingId, type: type, call_type: callType, channel_id: channelId)
+        incomingCall(
+            callId: callId,
+            media: media,
+            duration: duration,
+            bookingId: bookingId,
+            type: type,
+            call_type: callType,
+            channel_id: channelId,
+            pushCompletion: completion
+        )
     }
 
     @objc private func handleTokenInvalidated() {
@@ -127,8 +140,6 @@ public class CallKitVoipPlugin: CAPPlugin {
 
     // MARK: - JS-Callable Methods
 
-    // Called from JS to initialize — CXProvider is already set up in load(),
-    // so this only needs to emit the cached token if available.
     @objc dynamic func register(_ call: CAPPluginCall) {
         print("📱 CallKitVoip: JS register() called")
 
@@ -148,7 +159,9 @@ public class CallKitVoipPlugin: CAPPlugin {
         }
     }
 
-    // Called from JS when call UI is ready and VoIP is actually connected
+    // Called from JS when PJSIP call is actually connected.
+    // We no longer delay action.fulfill() here — it was already called immediately
+    // in CXAnswerCallAction. This just updates CallKit's display timer and notifies JS.
     @objc dynamic func callConnected(_ call: CAPPluginCall) {
         guard let uuidString = call.getString("uuid"),
               let uuid = UUID(uuidString: uuidString) else {
@@ -156,18 +169,16 @@ public class CallKitVoipPlugin: CAPPlugin {
             return
         }
 
-        print("✅ CallKitVoip: Call connected — configuring audio session for UUID: \(uuid)")
+        print("✅ CallKitVoip: PJSIP call connected — updating CallKit for UUID: \(uuid)")
 
-        // Tell CallKit the call is connected now (after actual VoIP connection)
-        if let action = pendingAnswerAction, action.callUUID == uuid {
-            action.fulfill(withDateConnected: Date())
-            pendingAnswerAction = nil
-            print("📱 CallKitVoip: CallKit notified — call connected at \(Date())")
-        }
+        // Update CallKit to reflect the true connected time (starts the in-call timer
+        // from when PJSIP actually connected rather than when Answer was tapped).
+        // This does NOT re-trigger the answer flow — the CXCallUpdate here is intentionally
+        // empty; we only use it to report the updated connection timestamp.
+        let update = CXCallUpdate()
+        provider?.reportCall(with: uuid, updated: update)
 
         configureAudioSession()
-
-        // Notify JS that the call is now connected (VoIP established)
         notifyEvent(eventName: "callConnected", uuid: uuid)
 
         call.resolve()
@@ -185,9 +196,7 @@ public class CallKitVoipPlugin: CAPPlugin {
 
         print("✅ CallKitVoip: End call — UUID: \(uuid)")
 
-        // Notify JS that the call was ended (before cleaning up registry)
         notifyEvent(eventName: "callEnded", uuid: uuid)
-
         endCallInternal(uuid: uuid)
         call.resolve()
     }
@@ -216,11 +225,11 @@ public class CallKitVoipPlugin: CAPPlugin {
         bookingId: String,
         type: String,
         call_type: String,
-        channel_id: String
+        channel_id: String,
+        pushCompletion: (() -> Void)?
     ) {
         let uuid = UUID()
 
-        // Store call configuration BEFORE reporting to CallKit
         connectionIdRegistry[uuid] = CallConfig(
             callId: callId,
             media: media,
@@ -250,27 +259,24 @@ public class CallKitVoipPlugin: CAPPlugin {
                 print("✅ CallKitVoip: Successfully reported incoming call")
                 self.startTimeoutTimer(for: uuid)
             }
+
+            // ✅ Call PushKit completion HERE — after reportNewIncomingCall finishes.
+            // This is critical for iOS 16: calling it before this point (e.g. a 2s safety
+            // net in AppDelegate) signals iOS the app is done and causes suspension,
+            // resulting in a cold start when the user taps Answer.
+            pushCompletion?()
         }
     }
 
     private func endCallInternal(uuid: UUID) {
         cancelTimeoutTimer(for: uuid)
-        if let pending = pendingAnswerAction, pending.callUUID == uuid {
-            pending.fulfill(withDateConnected: Date())
-            pendingAnswerAction = nil
-        }
         answeredCalls.remove(uuid)
         connectionIdRegistry.removeValue(forKey: uuid)
-
         provider?.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
     }
 
     private func endAllCalls() {
         print("📱 CallKitVoip: Ending all active calls")
-        if let pending = pendingAnswerAction {
-            pending.fulfill(withDateConnected: Date())
-            pendingAnswerAction = nil
-        }
 
         for (uuid, _) in connectionIdRegistry {
             cancelTimeoutTimer(for: uuid)
@@ -324,10 +330,6 @@ extension CallKitVoipPlugin: CXProviderDelegate {
 
     public func providerDidReset(_ provider: CXProvider) {
         print("⚠️ CallKitVoip: Provider reset — cleaning up all calls")
-        if let pending = pendingAnswerAction {
-            pending.fulfill(withDateConnected: Date())
-            pendingAnswerAction = nil
-        }
         for (_, timer) in timeoutTimers {
             timer.invalidate()
         }
@@ -336,7 +338,7 @@ extension CallKitVoipPlugin: CXProviderDelegate {
         answeredCalls.removeAll()
     }
 
-    // Called when user answers the call
+    // Called when user taps Answer on CallKit UI
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         print("✅ CallKitVoip: User answered call: \(action.callUUID)")
 
@@ -351,13 +353,17 @@ extension CallKitVoipPlugin: CXProviderDelegate {
 
         let uuid = action.callUUID
 
-        // Store action; we will fulfill(withDateConnected:) in callConnected() when VoIP is actually connected
-        pendingAnswerAction = action
+        // ✅ Fulfill immediately — this is required on iOS 16 to keep the app alive
+        // and prevent cold-start relaunch. Do NOT delay this waiting for PJSIP.
+        // The CallKit in-call timer will start now, but callConnected() will issue
+        // a reportCall(updated:) to sync the display when PJSIP actually connects.
+        action.fulfill()
 
         func configureAndNotify() {
             configureAudioSession()
+            // Notify JS to initiate PJSIP answer — JS calls callConnected() when ready
             notifyEvent(eventName: "callAnswered", uuid: uuid)
-            print("📱 CallKitVoip: callAnswered event sent to JS — CallKit will be told connected when callConnected() is called")
+            print("📱 CallKitVoip: callAnswered sent to JS — waiting for callConnected()")
         }
 
         let session = AVAudioSession.sharedInstance()
@@ -366,7 +372,7 @@ extension CallKitVoipPlugin: CXProviderDelegate {
             configureAndNotify()
         case .denied:
             configureAndNotify()
-            print("⚠️ CallKitVoip: Microphone permission denied — prompt user to enable in Settings")
+            print("⚠️ CallKitVoip: Microphone permission denied")
         case .undetermined:
             session.requestRecordPermission { _ in
                 DispatchQueue.main.async { configureAndNotify() }
@@ -376,19 +382,12 @@ extension CallKitVoipPlugin: CXProviderDelegate {
         }
     }
 
-    // Called when user declines or call ends via CallKit UI
+    // Called when user declines or ends via CallKit UI
     public func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         print("⚠️ CallKitVoip: CXEndCallAction received for: \(action.callUUID)")
 
         cancelTimeoutTimer(for: action.callUUID)
 
-        // If user ended before callConnected(), fulfill the pending answer so CallKit cleans up
-        if let pending = pendingAnswerAction, pending.callUUID == action.callUUID {
-            pending.fulfill(withDateConnected: Date())
-            pendingAnswerAction = nil
-        }
-
-        // Always notify JS so it can end the PJSIP call (whether user declined or ended from CallKit UI)
         notifyEvent(eventName: "callEnded", uuid: action.callUUID)
 
         answeredCalls.remove(action.callUUID)
@@ -397,9 +396,9 @@ extension CallKitVoipPlugin: CXProviderDelegate {
         action.fulfill()
     }
 
-    // Audio session is now active — WebRTC/audio can start
+    // Audio session active — WebRTC/PJSIP audio can start
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        print("✅ CallKitVoip: Audio session activated — app is in foreground")
+        print("✅ CallKitVoip: Audio session activated")
     }
 
     public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {

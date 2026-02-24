@@ -110,10 +110,15 @@ public class CallKitVoipPlugin extends Plugin {
                 
                 final String finalConnectionId = connectionId;
                 if (ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                        notifyEvent("callAnswered", finalConnectionId);
-                        Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + finalConnectionId);
-                    }, 500);
+                    bridge.getActivity().runOnUiThread(() -> {
+                        try {
+                            Thread.sleep(500);
+                            notifyEvent("callAnswered", finalConnectionId);
+                            Log.d("CallKitVoip", "callAnswered event fired for connectionId: " + finalConnectionId);
+                        } catch (InterruptedException e) {
+                            Log.e("CallKitVoip", "Error in delayed callback", e);
+                        }
+                    });
                 } else {
                     pendingAnswerConnectionId = finalConnectionId;
                     ActivityCompat.requestPermissions(getActivity(), new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_CODE_MICROPHONE_AT_ANSWER);
