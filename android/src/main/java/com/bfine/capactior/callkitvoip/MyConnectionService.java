@@ -113,6 +113,11 @@ public class MyConnectionService extends ConnectionService {
                             
                             CallQualityMonitor.trackCallEnd(connectionId, "Timeout - auto rejected");
                             
+                            CallConfig config = CallKitVoipPlugin.getCallConfig(connectionId);
+                            if (config != null) {
+                                CallKitVoipPlugin.notifyRejectToBackend(context, config);
+                            }
+                            
                             CallKitVoipPlugin plugin = CallKitVoipPlugin.getInstance();
                             if (plugin != null) {
                                 plugin.notifyEvent("callRejected", connectionId);
@@ -250,6 +255,11 @@ public class MyConnectionService extends ConnectionService {
                     Log.d(TAG, "Call rejected - connectionId: " + connectionId);
                     
                     CallQualityMonitor.trackCallEnd(connectionId, "User rejected");
+                    
+                    CallConfig config = CallKitVoipPlugin.getCallConfig(connectionId);
+                    if (config != null) {
+                        CallKitVoipPlugin.notifyRejectToBackend(getApplicationContext(), config);
+                    }
                     
                     CallKitVoipPlugin plugin = CallKitVoipPlugin.getInstance();
                     if (plugin != null) {

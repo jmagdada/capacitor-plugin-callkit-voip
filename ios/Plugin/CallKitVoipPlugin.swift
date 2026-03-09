@@ -18,6 +18,12 @@ public class CallKitVoipPlugin: CAPPlugin {
     // Track timeout timers for auto-reject
     private var timeoutTimers: [UUID: Timer] = [:]
 
+    // Reject-call backend API config (stored in UserDefaults for use when app is backgrounded)
+    private let kRejectConfigBaseUrl = "CallKitVoip.rejectConfig.baseUrl"
+    private let kRejectConfigPath = "CallKitVoip.rejectConfig.path"
+    private let kRejectConfigAuthToken = "CallKitVoip.rejectConfig.authToken"
+    private let kRejectConfigHeaders = "CallKitVoip.rejectConfig.headers"
+
     // MARK: - Plugin Lifecycle
 
     // ✅ Called before JS bridge is ready — ideal place to set up CXProvider and observers
@@ -157,6 +163,28 @@ public class CallKitVoipPlugin: CAPPlugin {
         } else {
             call.reject("Token not available yet")
         }
+    }
+
+    @objc dynamic func setRejectCallConfig(_ call: CAPPluginCall) {
+        print("🔍 CallKitVoip: setRejectCallConfig called")
+        print("🔍 CallKitVoip: setRejectCallConfig - baseUrl: \(call.getString("baseUrl") ?? "nil"), path: \(call.getString("path") ?? "nil"), authToken: \(call.getString("authToken") ?? "nil"), headers: \(call.getObject("headers") as? [String: String] ?? [:])")
+        guard let baseUrl = call.getString("baseUrl"), !baseUrl.isEmpty else {
+            call.reject("baseUrl is required")
+            return
+        }
+        let path = call.getString("path") ?? "/api/voip/{channel_id}/drop"
+        let authToken = call.getString("authToken")
+        let headers = call.getObject("headers") as? [String: String]
+
+        UserDefaults.standard.set(baseUrl, forKey: kRejectConfigBaseUrl)
+        UserDefaults.standard.set(path, forKey: kRejectConfigPath)
+        UserDefaults.standard.set(authToken, forKey: kRejectConfigAuthToken)
+        if let headers = headers, let data = try? JSONSerialization.data(withJSONObject: headers) {
+            UserDefaults.standard.set(String(data: data, encoding: .utf8), forKey: kRejectConfigHeaders)
+        } else {
+            UserDefaults.standard.removeObject(forKey: kRejectConfigHeaders)
+        }
+        call.resolve()
     }
 
     // Called from JS when PJSIP call is actually connected.
@@ -300,6 +328,7 @@ public class CallKitVoipPlugin: CAPPlugin {
 
             if self.connectionIdRegistry[uuid] != nil {
                 print("⏰ CallKitVoip: Timeout — auto-rejecting call after 30 seconds: \(uuid)")
+                self.notifyRejectToBackend(uuid: uuid)
                 self.endCallInternal(uuid: uuid)
                 self.notifyEvent(eventName: "callEnded", uuid: uuid)
             }
@@ -311,6 +340,89 @@ public class CallKitVoipPlugin: CAPPlugin {
     private func cancelTimeoutTimer(for uuid: UUID) {
         timeoutTimers[uuid]?.invalidate()
         timeoutTimers.removeValue(forKey: uuid)
+    }
+
+    private func notifyRejectToBackend(uuid: UUID) {
+        guard let config = connectionIdRegistry[uuid] else { return }
+
+        let baseUrl = UserDefaults.standard.string(forKey: kRejectConfigBaseUrl)
+        let pathTemplate = UserDefaults.standard.string(forKey: kRejectConfigPath) ?? "/api/voip/{channel_id}/drop"
+        let authToken = UserDefaults.standard.string(forKey: kRejectConfigAuthToken)
+        let headersJson = UserDefaults.standard.string(forKey: kRejectConfigHeaders)
+
+        print("🔍 CallKitVoip: Reject API config - baseUrl: \(baseUrl ?? "nil"), pathTemplate: \(pathTemplate ?? "nil"), authToken: \(authToken ?? "nil"), headersJson: \(headersJson ?? "nil")")
+
+        guard let base = baseUrl else {
+            print("⚠️ CallKitVoip: Reject API not configured (baseUrl missing)")
+            return
+        }
+
+        var pathAllowed = CharacterSet.urlPathAllowed
+        pathAllowed.remove(charactersIn: "/")
+        let channelId = config.channel_id.addingPercentEncoding(withAllowedCharacters: pathAllowed) ?? config.channel_id
+        let path = pathTemplate.replacingOccurrences(of: "{channel_id}", with: channelId)
+        let baseNorm = base.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pathNorm = path.hasPrefix("/") ? path : "/" + path
+        guard let url = URL(string: baseNorm + pathNorm) else {
+            print("⚠️ CallKitVoip: Reject API URL invalid")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        if let token = authToken, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let json = headersJson, let data = json.data(using: .utf8), let extra = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+            for (k, v) in extra { request.setValue(v, forHTTPHeaderField: k) }
+        }
+
+        // Log for BE dev: full path and headers (copy-paste friendly)
+        let fullPath = url.absoluteString
+        let allHeaders = request.allHTTPHeaderFields ?? [:]
+        let headersLog = allHeaders.map { "  \($0.key): \($0.value)" }.joined(separator: "\n")
+        print("""
+        📤 CallKitVoip: Reject API
+        ---
+        1. Final full path:
+        \(fullPath)
+        --
+        2. Final headers:
+        \(headersLog.isEmpty ? "  (none)" : headersLog)
+        ---
+        """)
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("""
+                ❌ CallKitVoip: Reject API request failed — copy for BE dev
+                ---
+                3. Complete error:
+                \(String(describing: error))
+                localizedDescription: \(error.localizedDescription)
+                ---
+                """)
+                return
+            }
+            let httpResponse = response as? HTTPURLResponse
+            let code = httpResponse?.statusCode ?? 0
+            let responseBody = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            if code >= 200 && code < 300 {
+                print("✅ CallKitVoip: Reject reported to backend")
+            } else {
+                print("""
+                ⚠️ CallKitVoip: Reject API error — copy for BE dev
+                ---
+                3. Complete error response:
+                Status: \(code)
+                \(httpResponse.map { "Headers: \($0.allHeaderFields)" } ?? "Headers: (none)")
+                Body:
+                \(responseBody.isEmpty ? "(empty)" : responseBody)
+                ---
+                """)
+            }
+        }
+        task.resume()
     }
 
     private func configureAudioSession() {
@@ -387,6 +499,10 @@ extension CallKitVoipPlugin: CXProviderDelegate {
         print("⚠️ CallKitVoip: CXEndCallAction received for: \(action.callUUID)")
 
         cancelTimeoutTimer(for: action.callUUID)
+
+        if !answeredCalls.contains(action.callUUID) {
+            notifyRejectToBackend(uuid: action.callUUID)
+        }
 
         notifyEvent(eventName: "callEnded", uuid: action.callUUID)
 

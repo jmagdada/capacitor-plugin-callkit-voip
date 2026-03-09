@@ -1,9 +1,22 @@
 import type { PluginListenerHandle } from '@capacitor/core';
 
+export interface RejectCallConfig {
+  /** Base URL of your API, e.g. "https://pbx.tolk.co.uk" */
+  baseUrl: string;
+  /** Path template with {channel_id} placeholder, e.g. "/api/voip/{channel_id}/drop". Native will replace {channel_id} with URL-encoded channel_id. */
+  path?: string;
+  /** Auth token sent in Authorization header as "Bearer <token>" */
+  authToken?: string;
+  /** Optional extra headers */
+  headers?: Record<string, string>;
+}
+
 export interface CallKitVoipPlugin {
   register(options: { userToken: string }): Promise<void>;
 
   getVoipToken(): Promise<CallToken>;
+
+  setRejectCallConfig(options: RejectCallConfig): Promise<void>;
 
   requestPhoneNumbersPermission(): Promise<{ granted: boolean; message: string }>;
 

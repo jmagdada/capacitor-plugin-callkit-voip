@@ -8,6 +8,7 @@ import android.telecom.Connection;
 import android.telecom.DisconnectCause;
 import android.util.Log;
 
+import com.bfine.capactior.callkitvoip.CallConfig;
 import com.bfine.capactior.callkitvoip.CallKitVoipPlugin;
 import com.bfine.capactior.callkitvoip.MyConnectionService;
 
@@ -30,6 +31,11 @@ public class VoipForegroundServiceActionReceiver extends BroadcastReceiver {
         Log.d(TAG, "action: " + action + ", connectionId: " + connectionId);
 
         if (action.equals("CANCEL_CALL")) {
+            CallConfig config = CallKitVoipPlugin.getCallConfig(connectionId);
+            if (config != null) {
+                CallKitVoipPlugin.notifyRejectToBackend(context.getApplicationContext(), config);
+            }
+
             context.stopService(new Intent(context, VoipForegroundService.class));
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

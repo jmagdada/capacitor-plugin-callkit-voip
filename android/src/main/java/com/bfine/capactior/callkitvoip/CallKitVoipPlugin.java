@@ -41,6 +41,14 @@ public class CallKitVoipPlugin extends Plugin {
     private static String pendingAnswerConnectionId = null;
     private static final int REQUEST_CODE_MICROPHONE_AT_ANSWER = 1003;
 
+    /** Reject-call backend API config (SharedPreferences for use from BroadcastReceiver / ConnectionService) */
+    private static final String PREF_REJECT_CONFIG = "CallKitVoip.reject_config";
+    private static final String KEY_BASE_URL = "baseUrl";
+    private static final String KEY_PATH = "path";
+    private static final String KEY_AUTH_TOKEN = "authToken";
+    private static final String KEY_HEADERS_JSON = "headersJson";
+    private static final String DEFAULT_PATH = "/api/voip/{channel_id}/drop";
+
     @Override
     public void load() {
         staticBridge = this.bridge;
@@ -338,6 +346,32 @@ public class CallKitVoipPlugin extends Plugin {
             call.reject("Token not available yet");
             Log.w("CallKitVoip", "Attempted to get VoIP token but none available");
         }
+    }
+
+    @PluginMethod
+    public void setRejectCallConfig(PluginCall call) {
+        String baseUrl = call.getString("baseUrl");
+        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+            call.reject("baseUrl is required");
+            return;
+        }
+        String path = call.getString("path");
+        if (path == null || path.isEmpty()) path = DEFAULT_PATH;
+        String authToken = call.getString("authToken");
+        JSObject headersObj = call.getObject("headers");
+        String headersJson = null;
+        if (headersObj != null) {
+            headersJson = headersObj.toString();
+        }
+
+        android.content.SharedPreferences prefs = getContext().getSharedPreferences(PREF_REJECT_CONFIG, Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString(KEY_BASE_URL, baseUrl.trim())
+                .putString(KEY_PATH, path.startsWith("/") ? path : "/" + path)
+                .putString(KEY_AUTH_TOKEN, authToken != null ? authToken : "")
+                .putString(KEY_HEADERS_JSON, headersJson != null ? headersJson : "{}")
+                .apply();
+        call.resolve();
     }
 
     @PluginMethod
@@ -650,6 +684,74 @@ public class CallKitVoipPlugin extends Plugin {
 
     public static void removeCallConfig(String connectionId) {
         connectionIdRegistry.remove(connectionId);
+    }
+
+    /**
+     * Call from native when user rejects a call. Uses stored config (baseUrl, path template, authToken).
+     * Builds URL: baseUrl + path with {channel_id} replaced by URL-encoded channel_id (e.g. PJSIP/1280_... → PJSIP%2F1280_...).
+     * Method: DELETE. Auth: Bearer {token}. No request body.
+     * Safe to call from BroadcastReceiver / ConnectionService (no plugin instance required).
+     */
+    public static void notifyRejectToBackend(Context context, CallConfig config) {
+        if (config == null) return;
+
+        android.content.SharedPreferences prefs = context.getSharedPreferences(PREF_REJECT_CONFIG, Context.MODE_PRIVATE);
+        String baseUrl = prefs.getString(KEY_BASE_URL, null);
+        String pathTemplate = prefs.getString(KEY_PATH, DEFAULT_PATH);
+        String authToken = prefs.getString(KEY_AUTH_TOKEN, "");
+        String headersJson = prefs.getString(KEY_HEADERS_JSON, "{}");
+        if (headersJson == null || headersJson.isEmpty()) headersJson = "{}";
+
+        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+            Log.d("CallKitVoip", "Reject API not configured (baseUrl missing), skipping backend notify");
+            return;
+        }
+
+        String channelIdRaw = config.channel_id != null ? config.channel_id : "";
+        String channelIdEncoded;
+        try {
+            channelIdEncoded = java.net.URLEncoder.encode(channelIdRaw, java.nio.charset.StandardCharsets.UTF_8.name()).replace("+", "%20");
+        } catch (java.io.UnsupportedEncodingException e) {
+            channelIdEncoded = channelIdRaw;
+        }
+        String path = pathTemplate.replace("{channel_id}", channelIdEncoded);
+        String base = baseUrl.trim().replaceAll("/$", "");
+        String pathNorm = path.startsWith("/") ? path : "/" + path;
+        final String urlStr = base + pathNorm;
+        final String authTokenFinal = authToken != null ? authToken : "";
+        final String headersJsonFinal = headersJson;
+
+        new Thread(() -> {
+            try {
+                java.net.URL url = new java.net.URL(urlStr);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("DELETE");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
+
+                if (!authTokenFinal.isEmpty()) {
+                    conn.setRequestProperty("Authorization", "Bearer " + authTokenFinal);
+                }
+                try {
+                    org.json.JSONObject headers = new org.json.JSONObject(headersJsonFinal);
+                    java.util.Iterator<String> it = headers.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        conn.setRequestProperty(k, headers.optString(k, ""));
+                    }
+                } catch (Exception ignored) {}
+
+                int code = conn.getResponseCode();
+                if (code >= 200 && code < 300) {
+                    Log.d("CallKitVoip", "Reject reported to backend");
+                } else {
+                    Log.w("CallKitVoip", "Reject API returned " + code);
+                }
+                conn.disconnect();
+            } catch (Exception e) {
+                Log.e("CallKitVoip", "Reject API request failed", e);
+            }
+        }).start();
     }
 
     public static Map<String, CallConfig> getAllCallConfigs() {

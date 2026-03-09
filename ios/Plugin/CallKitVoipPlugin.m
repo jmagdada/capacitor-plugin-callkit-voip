@@ -7,6 +7,7 @@
 CAP_PLUGIN(CallKitVoipPlugin, "CallKitVoip",
            CAP_PLUGIN_METHOD(register, CAPPluginReturnPromise);
            CAP_PLUGIN_METHOD(getVoipToken, CAPPluginReturnPromise);
+           CAP_PLUGIN_METHOD(setRejectCallConfig, CAPPluginReturnPromise);
            CAP_PLUGIN_METHOD(callConnected, CAPPluginReturnPromise);
            CAP_PLUGIN_METHOD(endCall, CAPPluginReturnPromise);
 )
