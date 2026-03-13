@@ -65,6 +65,38 @@ public class MyConnectionService extends ConnectionService {
         }
     }
 
+    /**
+     * Call when the app has answered/connected the call (e.g. via in-app UI or when PJSIP reports
+     * call connected). Sets the Telecom connection to ACTIVE and cancels the 30s ring timeout so
+     * the call is not auto-rejected. If the user only answers via the system full-screen Answer
+     * button, onAnswer() already does this; this is for the path where the app answers first.
+     */
+    public static void setActiveAndCancelTimeout(final String connectionId) {
+        if (connectionId == null || connectionId.isEmpty()) {
+            return;
+        }
+        if (!connectionId.equals(timeoutConnectionId)) {
+            Log.d(TAG, "setActiveAndCancelTimeout: connectionId " + connectionId + " does not match current timeout connection, ignoring");
+            return;
+        }
+        cancelTimeout();
+        final Connection conn = currentConnection;
+        if (conn != null) {
+            Handler h = timeoutHandler != null ? timeoutHandler : new Handler(Looper.getMainLooper());
+            h.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        conn.setActive();
+                        Log.d(TAG, "Connection set to ACTIVE from app answer/connect for connectionId: " + connectionId);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error setting connection to ACTIVE", e);
+                    }
+                }
+            });
+        }
+    }
+
     private static void startTimeout(final Connection connection, final ConnectionRequest request, final android.content.Context context) {
         cancelTimeout();
         

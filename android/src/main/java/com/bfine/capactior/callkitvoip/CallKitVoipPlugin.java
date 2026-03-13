@@ -762,6 +762,9 @@ public class CallKitVoipPlugin extends Plugin {
     public void answerCall(PluginCall call) {
         String connectionId = call.getString("uuid");
         if (connectionId != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                MyConnectionService.setActiveAndCancelTimeout(connectionId);
+            }
             CallQualityMonitor.trackCallEnd(connectionId, "User answered");
             notifyEvent("callAnswered", connectionId);
         }
@@ -802,6 +805,9 @@ public class CallKitVoipPlugin extends Plugin {
         String connectionId = call.getString("uuid");
         if (connectionId != null) {
             Log.d("CallKitVoip", "Call connected for uuid: " + connectionId);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                MyConnectionService.setActiveAndCancelTimeout(connectionId);
+            }
         }
         call.resolve();
     }
